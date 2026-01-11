@@ -13,10 +13,8 @@ local function init()
     local fundo = require('fundo')
     ---@type FundoConfig
     Config = vim.tbl_deep_extend('keep', fundo._config or {}, def)
-    vim.validate({
-        archives_dir = {Config.archives_dir, 'string'},
-        limit_archives_size = {Config.limit_archives_size, 'number'}
-    })
+    vim.validate('archives_dir', Config.archives_dir, 'string')
+    vim.validate('limit_archives_size', Config.limit_archives_size, 'number')
     Config.archives_dir = vim.fn.expand(Config.archives_dir)
     fundo._config = nil
 end
