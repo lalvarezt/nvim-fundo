@@ -19,8 +19,6 @@ LUAROCKS ?= $(TARGET_DIR)/bin/luarocks
 BUSTED ?= $(TARGET_DIR)/bin/busted
 BUSTED_HELPER ?= $(PWD)/spec/helper/fixtures.lua
 
-PROMISE_ASYNC ?= $(TARGET_DIR)/share/lua/5.1/promise-async
-
 LUA_LS ?= $(DEPS)/lua-language-server
 LINT_LEVEL ?= Information
 
@@ -28,7 +26,7 @@ all: deps
 
 deps: | $(HEREROCKS) $(BUSTED)
 
-test: $(BUSTED) $(PROMISE_ASYNC)
+test: $(BUSTED)
 	@echo Testing ......
 	@$(HEREROCKS_ACTIVE) && eval $$(luarocks path) && \
 		$(NVIM_BIN) --clean -n --headless -u spec/init.lua -- \
@@ -43,9 +41,6 @@ $(LUAROCKS): $(HEREROCKS)
 
 $(BUSTED): $(LUAROCKS)
 	$(HEREROCKS_ACTIVE) && luarocks install busted
-
-$(PROMISE_ASYNC): $(LUAROCKS)
-	@$(HEREROCKS_ACTIVE) && luarocks install promise-async || true
 
 lint:
 	@rm -rf $(LUA_LS)

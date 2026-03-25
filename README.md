@@ -28,8 +28,8 @@ Install with [Packer.nvim](https://github.com/wbthomason/packer.nvim):
 
 ```lua
 use {
-    'kevinhwang91/nvim-fundo', requires = 'kevinhwang91/promise-async',
-     run = function() require('fundo').install() end
+    'kevinhwang91/nvim-fundo',
+    run = function() require('fundo').install() end
 }
 ```
 
@@ -37,8 +37,8 @@ use {
 
 ```lua
 use {
-    'kevinhwang91/nvim-fundo', requires = 'kevinhwang91/promise-async',
-     run = function() require('fundo').install() end
+    'kevinhwang91/nvim-fundo',
+    run = function() require('fundo').install() end
 }
 
 vim.o.undofile = true
@@ -50,6 +50,15 @@ require('fundo').setup()
 Use undo file as usual.
 
 ## Documentation
+
+## Vendored Dependencies
+
+`nvim-fundo` vendors `promise-async` from:
+
+- repository: <https://github.com/kevinhwang91/promise-async>
+- commit: `119e8961014c9bfaf1487bf3c2a393d254f337e2`
+
+The upstream BSD-3-Clause license is included in [LICENSE.promise-async](./LICENSE.promise-async).
 
 ### How does nvim-undo keep the undo history?
 
