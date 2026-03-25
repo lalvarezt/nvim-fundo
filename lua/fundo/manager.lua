@@ -1,3 +1,4 @@
+local api = vim.api
 local fn = vim.fn
 local uv = vim.loop
 
@@ -165,6 +166,14 @@ function Manager:initialize()
     event:on('VimSuspend', function() self:syncAll(true) end, self.disposables)
     event:on('TermEnter', function() self:syncAll() end, self.disposables)
     event:on('FocusLost', function() self:syncAll() end, self.disposables)
+    for _, bufnr in ipairs(api.nvim_list_bufs()) do
+        if api.nvim_buf_is_loaded(bufnr) then
+            local u = self:attach(bufnr)
+            if u then
+                u:check()
+            end
+        end
+    end
     return self
 end
 
