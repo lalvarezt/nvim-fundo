@@ -22,6 +22,15 @@ local mutex = require('fundo.lib.mutex')
 ---@field disposables FundoDisposable[]
 local Manager = {}
 
+function Manager:detach(bufnr)
+    local u = self.undos[bufnr]
+    if u then
+        u:transferSync()
+        u:dispose()
+        self.undos[bufnr] = nil
+    end
+end
+
 function Manager:attach(bufnr)
     if not self.undos[bufnr] then
         local u = undo:new(bufnr, self.archivesDir)
@@ -147,11 +156,10 @@ function Manager:initialize()
         end
     end, self.disposables)
     event:on('BufWipeout', function(bufnr)
-        local u = self.undos[bufnr]
-        if u then
-            u:dispose()
-            self.undos[bufnr] = nil
-        end
+        self:detach(bufnr)
+    end, self.disposables)
+    event:on('BufUnload', function(bufnr)
+        self:detach(bufnr)
     end, self.disposables)
     event:on('CmdlineEnter', function(char)
         if char ~= ':' then

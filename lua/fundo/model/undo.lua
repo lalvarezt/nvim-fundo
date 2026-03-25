@@ -129,6 +129,17 @@ function Undo:transfer()
     end)
 end
 
+function Undo:transferSync()
+    if not self:shouldTransfer() then
+        return
+    end
+    local stat = fs.statSync(self.undoPath)
+    if stat then
+        fs.copyFileSync(self.name, self.fallbackPath)
+    end
+    self.isDirty = false
+end
+
 function Undo:check()
     if not self.attached or self.undoPath == '' then
         return

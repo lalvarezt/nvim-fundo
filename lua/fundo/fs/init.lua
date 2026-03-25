@@ -16,6 +16,12 @@ function FS.copyFile(path, newPath)
     end)
 end
 
+function FS.copyFileSync(path, newPath)
+    local p = newPath .. '.__'
+    uv.fs_copyfile(path, p)
+    pcall(uv.fs_rename, p, newPath)
+end
+
 ---@param path string
 ---@param bufferSize? number
 ---@param iterAction fun(entries: table): boolean?

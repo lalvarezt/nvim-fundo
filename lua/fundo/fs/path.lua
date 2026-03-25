@@ -19,6 +19,24 @@ local function normalizeStr(res, str)
     return res
 end
 
+local function splitSegments(p)
+    local res = {}
+    local i = 1
+    while i <= #p do
+        local s = p:find(Path.sep, i, true)
+        if not s then
+            table.insert(res, p:sub(i))
+            break
+        end
+        table.insert(res, p:sub(i, s - 1))
+        i = s + 1
+    end
+    if #res == 0 then
+        table.insert(res, '')
+    end
+    return res
+end
+
 ---
 ---@param p string
 ---@param suffix? string An optional suffix to remove
@@ -69,33 +87,35 @@ function Path.normalize(p)
     if p == '' then
         return '.'
     end
-    local res = {}
-    local i = 1
-    local li = 0
-    local firstIsSep = false
-    while i <= #p do
-        local s = p:find(Path.sep, i, true)
-        if not s then
-            break
-        end
-        if s == 1 then
-            firstIsSep = true
-        else
-            normalizeStr(res, p:sub(li, s - 1))
-        end
-        i = s + 1
-        li = i
+    local prefix = ''
+    local rest = p
+    local absolute = false
+    if Path.sep == [[\]] and rest:match('^%a:') then
+        prefix = rest:sub(1, 2)
+        rest = rest:sub(3)
     end
-    local lastIsSep = i > #p
-    normalizeStr(res, p:sub(li))
+    if rest:sub(1, 1) == Path.sep then
+        absolute = true
+        rest = rest:sub(2)
+    end
+    local trailingSep = rest ~= '' and rest:sub(-1) == Path.sep
+    local res = {}
+    for _, segment in ipairs(splitSegments(rest)) do
+        normalizeStr(res, segment)
+    end
     if #res == 0 then
-        return '.'
+        if absolute then
+            return prefix .. Path.sep
+        end
+        return prefix ~= '' and prefix or '.'
     end
     p = table.concat(res, Path.sep)
-    if firstIsSep then
-        p = Path.sep .. p
+    if absolute then
+        p = prefix .. Path.sep .. p
+    elseif prefix ~= '' then
+        p = prefix .. Path.sep .. p
     end
-    if lastIsSep then
+    if trailingSep then
         p = p .. Path.sep
     end
     return p
@@ -109,9 +129,12 @@ function Path.join(...)
     local res = {}
     for i = 1, argc do
         local sect = select(i, ...)
-        normalizeStr(res, sect)
+        assert(type(sect) == 'string', 'expected string')
+        if sect ~= '' then
+            table.insert(res, sect)
+        end
     end
-    return #res == 0 and '.' or table.concat(res, Path.sep)
+    return #res == 0 and '.' or Path.normalize(table.concat(res, Path.sep))
 end
 
 local function init()
