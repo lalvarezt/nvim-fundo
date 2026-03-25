@@ -65,12 +65,13 @@ function Manager:scanArchivesDir()
         local limit = self.limitArchivesSize * 1024 * 1024
         local tasks = {}
         for _, stat in ipairs(stats) do
-            if size > limit then
+            if size + stat.size > limit then
                 local p = path.join(self.archivesDir, stat.name)
                 log.debug(p, 'will be removed.')
                 table.insert(tasks, fs.unlink(p))
+            else
+                size = size + stat.size
             end
-            size = size + stat.size
         end
         return promise.all(tasks)
     end)

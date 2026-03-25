@@ -9,16 +9,16 @@ local def = {
 ---@type FundoConfig
 local Config = {}
 
-local function init()
+function Config.reload()
     local fundo = require('fundo')
-    ---@type FundoConfig
-    Config = vim.tbl_deep_extend('keep', fundo._config or {}, def)
-    vim.validate('archives_dir', Config.archives_dir, 'string')
-    vim.validate('limit_archives_size', Config.limit_archives_size, 'number')
-    Config.archives_dir = vim.fn.expand(Config.archives_dir)
+    local resolved = vim.tbl_deep_extend('keep', fundo._config or {}, def)
+    vim.validate('archives_dir', resolved.archives_dir, 'string')
+    vim.validate('limit_archives_size', resolved.limit_archives_size, 'number')
+    Config.archives_dir = vim.fn.expand(resolved.archives_dir)
+    Config.limit_archives_size = resolved.limit_archives_size
     fundo._config = nil
 end
 
-init()
+Config.reload()
 
 return Config

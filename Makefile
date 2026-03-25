@@ -2,9 +2,14 @@ SHELL := /bin/bash
 DEPS ?= build
 
 NVIM_BIN ?= nvim
-LUA_VERSION := $(shell $(NVIM_BIN) -v 2>/dev/null | grep -E '^Lua(JIT)?' | tr A-Z a-z)
-LUA_NUMBER := $(word 2,$(LUA_VERSION))
-TARGET_DIR := $(DEPS)/$(LUA_NUMBER)
+LUA_VERSION_LINE := $(shell $(NVIM_BIN) -v 2>/dev/null | grep -E '^Lua(JIT)?' | head -n1)
+LUA_NUMBER := $(shell printf '%s\n' "$(LUA_VERSION_LINE)" | sed -E 's/^LuaJIT[[:space:]]+([0-9]+\.[0-9]+).*/\1/; s/^Lua[[:space:]]+([0-9]+\.[0-9]+).*/\1/')
+ifeq ($(findstring LuaJIT,$(LUA_VERSION_LINE)),LuaJIT)
+LUA_FLAVOR := luajit
+else
+LUA_FLAVOR := lua
+endif
+TARGET_DIR := $(DEPS)/$(LUA_FLAVOR)-$(LUA_NUMBER)
 
 HEREROCKS ?= $(DEPS)/hererocks.py
 UNAME_S := $(shell uname -s)
@@ -37,7 +42,7 @@ $(HEREROCKS):
 	curl $(HEREROCKS_URL) -o $@
 
 $(LUAROCKS): $(HEREROCKS)
-	$(HEREROCKS_ENV) python $< $(TARGET_DIR) --$(LUA_VERSION) -r latest
+	$(HEREROCKS_ENV) python $< $(TARGET_DIR) --$(LUA_FLAVOR) $(LUA_NUMBER) -r latest
 
 $(BUSTED): $(LUAROCKS)
 	$(HEREROCKS_ACTIVE) && luarocks install busted

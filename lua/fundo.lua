@@ -15,6 +15,10 @@ end
 function M.setup(opts)
     opts = opts or {}
     M._config = opts
+    if package.loaded['fundo.config'] then
+        require('fundo.config').reload()
+    end
+    M.disable()
     M.enable()
 end
 
