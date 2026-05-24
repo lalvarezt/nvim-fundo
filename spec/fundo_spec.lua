@@ -2,6 +2,7 @@ local api = vim.api
 local fn = vim.fn
 local uv = vim.loop
 local async = require('async')
+local promise = require('promise')
 local manager = require('fundo.manager')
 local path = require('fundo.fs.path')
 
@@ -121,5 +122,60 @@ describe('fundo integration.', function()
         local remaining = fn.glob(path.join(archivesDir, '*'), false, true)
         assert.equal(1, #remaining)
         assert.equal(archives[2], remaining[1])
+    end)
+
+    it('does not fail the prune scan when an archive cannot be removed.', function()
+        local fs = require('fundo.fs')
+        local unlink = fs.unlink
+        local archive = path.join(archivesDir, 'stale')
+
+        fn.writefile({'stale archive'}, archive)
+        manager.limitArchivesSize = 0
+        fs.unlink = function()
+            return promise.reject('unlink failed')
+        end
+
+        async(function()
+            await(manager:scanArchivesDir())
+            done()
+        end)
+        local ok, err = wait()
+        fs.unlink = unlink
+
+        assert.True(ok, err)
+    end)
+
+    it('creates missing parent directories for a nested archive directory.', function()
+        local fs = require('fundo.fs')
+        local nestedArchivesDir = path.join(tmpdir, 'missing', 'nested', 'archives')
+
+        require('fundo').setup({
+            archives_dir = nestedArchivesDir,
+            limit_archives_size = 16,
+        })
+
+        assert.equal('directory', fs.statSync(nestedArchivesDir).type)
+    end)
+
+    it('detaches a buffer even when fallback archive transfer fails.', function()
+        local fs = require('fundo.fs')
+        local copyFileSync = fs.copyFileSync
+
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        local bufnr = api.nvim_get_current_buf()
+        api.nvim_buf_set_lines(bufnr, 0, -1, false, {'one', 'two'})
+        vim.cmd('write')
+
+        fs.copyFileSync = function()
+            error('archive write failed')
+        end
+        local ok, err = pcall(function()
+            manager:detach(bufnr)
+        end)
+        fs.copyFileSync = copyFileSync
+
+        assert.True(ok, err)
+        assert.Nil(manager:get(bufnr))
     end)
 end)

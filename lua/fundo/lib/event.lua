@@ -50,8 +50,15 @@ function Event:emit(name, ...)
         return
     end
     log.trace('event:', name, 'listeners:', listeners, 'args:', ...)
-    for _, listener in ipairs(listeners) do
-        listener(...)
+    local snapshot = {}
+    for i, listener in ipairs(listeners) do
+        snapshot[i] = listener
+    end
+    for _, listener in ipairs(snapshot) do
+        local ok, err = pcall(listener, ...)
+        if not ok then
+            pcall(log.error, 'event listener failed:', name, err)
+        end
     end
 end
 

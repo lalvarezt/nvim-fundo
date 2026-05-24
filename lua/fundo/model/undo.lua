@@ -6,6 +6,7 @@ local async = require('async')
 local path = require('fundo.fs.path')
 local fs = require('fundo.fs')
 local utils = require('fundo.utils')
+local log = require('fundo.lib.log')
 
 ---@class FundoUndo
 ---@field dir string
@@ -76,7 +77,7 @@ function Undo:loadFileAndUndo(winid)
 
     local ei = vim.o.eventignore
     vim.o.eventignore = 'all'
-    pcall(function()
+    local ok, err = pcall(function()
         local modified = vim.bo[self.bufnr].modified
         local lines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
         utils.bufCall(self.bufnr, function()
@@ -85,7 +86,10 @@ function Undo:loadFileAndUndo(winid)
                 keepj sil 1,%ddelete_
             ]]):format(#lines, fn.fnameescape(self.fallbackPath), #lines))
         end)
-        self:loadUndo()
+        local undoOk, undoErr = self:loadUndo()
+        if not undoOk then
+            pcall(log.warn, 'failed to load undo file:', self.undoPath, undoErr)
+        end
         api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
         vim.bo[self.bufnr].modified = modified
 
@@ -94,6 +98,12 @@ function Undo:loadFileAndUndo(winid)
         end
     end)
     vim.o.eventignore = ei
+    if not ok then
+        pcall(log.warn, 'failed to load fallback archive:', self.fallbackPath, err)
+        if winid and view and utils.isWinValid(winid) then
+            pcall(utils.restView, winid, view)
+        end
+    end
 end
 
 function Undo:loadFallBack()

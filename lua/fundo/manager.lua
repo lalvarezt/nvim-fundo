@@ -25,7 +25,12 @@ local Manager = {}
 function Manager:detach(bufnr)
     local u = self.undos[bufnr]
     if u then
-        u:transferSync()
+        local ok, err = pcall(function()
+            u:transferSync()
+        end)
+        if not ok then
+            pcall(log.warn, 'failed to transfer undo archive for buffer', bufnr, err)
+        end
         u:dispose()
         self.undos[bufnr] = nil
     end
@@ -77,12 +82,17 @@ function Manager:scanArchivesDir()
             if size + stat.size > limit then
                 local p = path.join(self.archivesDir, stat.name)
                 log.debug(p, 'will be removed.')
-                table.insert(tasks, fs.unlink(p))
+                tasks[p] = fs.unlink(p)
             else
                 size = size + stat.size
             end
         end
-        return promise.all(tasks)
+        local results = await(promise.allSettled(tasks))
+        for p, result in pairs(results) do
+            if result.status == 'rejected' then
+                pcall(log.warn, 'failed to prune archive:', p, result.reason)
+            end
+        end
     end)
 end
 
@@ -130,7 +140,7 @@ function Manager:initialize()
     self.archivesDir = path.normalize(config.archives_dir)
     self.limitArchivesSize = config.limit_archives_size
     -- convert 0o755 to decimal base
-    fs.mkdirSync(self.archivesDir, 493)
+    fs.mkdirpSync(self.archivesDir, 493)
     self.undos = {}
     self.lastScannedtime = uv.hrtime()
     self.mutex = mutex:new()
