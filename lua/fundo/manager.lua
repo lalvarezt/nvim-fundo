@@ -159,6 +159,12 @@ function Manager:initialize()
             u:check()
         end
     end, self.disposables)
+    event:on('FileChangedShellPost', function(bufnr)
+        local u = self.undos[bufnr]
+        if u then
+            u:check()
+        end
+    end, self.disposables)
     event:on('BufWritePost', function(bufnr)
         local u = self.undos[bufnr]
         if u then

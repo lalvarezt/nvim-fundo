@@ -13,7 +13,7 @@ local disposables = {}
 
 local function createEvents()
     local groupId = api.nvim_create_augroup('Fundo', {})
-    api.nvim_create_autocmd({'BufReadPost', 'BufWritePost', 'BufWipeout', 'BufUnload'}, {
+    api.nvim_create_autocmd({'BufReadPost', 'BufWritePost', 'BufWipeout', 'BufUnload', 'FileChangedShellPost'}, {
         group = groupId,
         callback = function(t) event:emit(t.event, t.buf) end
     })
