@@ -3,6 +3,7 @@ local fn = vim.fn
 local cmd = vim.cmd
 
 local async = require('async')
+local promise = require('promise')
 local path = require('fundo.fs.path')
 local fs = require('fundo.fs')
 local utils = require('fundo.utils')
@@ -69,6 +70,33 @@ function Undo:loadUndo()
     end)
 end
 
+function Undo:saveUndo()
+    if self.undoPath == '' then
+        return false
+    end
+    local ok, cmdOk, cmdErr = pcall(utils.bufCall, self.bufnr, function()
+        return pcall(cmd, 'sil wundo! ' .. fn.fnameescape(self.undoPath))
+    end)
+    if not ok then
+        return false, cmdOk
+    end
+    return cmdOk, cmdErr
+end
+
+function Undo:saveUndoAsync()
+    return promise(function(resolve)
+        local function run()
+            local ok, err = self:saveUndo()
+            resolve({ok = ok, err = err})
+        end
+        if vim.in_fast_event and vim.in_fast_event() then
+            vim.schedule(run)
+        else
+            run()
+        end
+    end)
+end
+
 function Undo:loadFileAndUndo(winid)
     local view
     if winid then
@@ -123,7 +151,7 @@ function Undo:loadFallBack()
 end
 
 function Undo:shouldTransfer()
-    return self.attached and self.isDirty
+    return self.attached and (self.isDirty or (self.undoPath ~= '' and not fs.statSync(self.undoPath)))
 end
 
 function Undo:transfer()
@@ -131,7 +159,11 @@ function Undo:transfer()
         if not self:shouldTransfer() then
             return
         end
-        local stat = await(fs.stat(self.undoPath))
+        local undo = await(self:saveUndoAsync())
+        if not undo.ok then
+            pcall(log.warn, 'failed to save undo file:', self.undoPath, undo.err)
+        end
+        local stat = await(fs.stat(self.name))
         if stat then
             await(fs.copyFile(self.name, self.fallbackPath))
         end
@@ -143,7 +175,11 @@ function Undo:transferSync()
     if not self:shouldTransfer() then
         return
     end
-    local stat = fs.statSync(self.undoPath)
+    local undoOk, undoErr = self:saveUndo()
+    if not undoOk then
+        pcall(log.warn, 'failed to save undo file:', self.undoPath, undoErr)
+    end
+    local stat = fs.statSync(self.name)
     if stat then
         fs.copyFileSync(self.name, self.fallbackPath)
     end
