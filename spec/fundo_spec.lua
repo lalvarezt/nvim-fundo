@@ -134,6 +134,29 @@ describe('fundo integration.', function()
         assert_history_restores_to({'one', 'two'})
     end)
 
+    it('archives an existing clean undo tree before Neovim is closed.', function()
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
+        vim.cmd('write')
+        sync_all()
+        clear_archives()
+
+        local u = manager:get(api.nvim_get_current_buf())
+        assert.truthy(u, 'expected fundo to track the edited buffer')
+        assert.False(u.isDirty, 'expected the native undo file to already be synced')
+        assert.True(u:shouldTransfer(), 'expected missing archive to be recreated')
+
+        vim.cmd('bwipeout!')
+        assert.are_not.equal(0, #archives())
+
+        fn.writefile({'external', 'change'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        assert.same({'external', 'change'}, buffer_lines())
+
+        assert_history_restores_to({'one', 'two'})
+    end)
+
     it('restores undo history after loaded buffer external file changes.', function()
         fn.writefile({'one'}, file)
         vim.cmd('edit ' .. fn.fnameescape(file))

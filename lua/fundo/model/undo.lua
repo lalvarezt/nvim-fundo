@@ -132,26 +132,45 @@ function Undo:loadFileAndUndo(winid)
             pcall(utils.restView, winid, view)
         end
     end
+    return ok
 end
 
 function Undo:loadFallBack()
     if not fs.statSync(self.fallbackPath) then
-        return
+        return false
     end
+    local loaded = false
     local preferredWinid, winids = utils.getWinByBuf(self.bufnr)
     if preferredWinid == -1 then
-        self:loadFileAndUndo()
+        loaded = self:loadFileAndUndo()
     elseif winids then
         for _, winid in ipairs(winids) do
-            self:loadFileAndUndo(winid)
+            loaded = self:loadFileAndUndo(winid) or loaded
         end
     else
-        self:loadFileAndUndo(preferredWinid)
+        loaded = self:loadFileAndUndo(preferredWinid)
     end
+    if loaded then
+        -- The buffer now contains the externally changed file with the restored
+        -- undo tree. Persist that repaired pair before another external edit can
+        -- make the native undo file invalid again.
+        self.isDirty = self.undoPath ~= '' and vim.bo[self.bufnr].undolevels ~= 0
+    end
+    return loaded
 end
 
 function Undo:shouldTransfer()
-    return self.attached and (self.isDirty or (self.undoPath ~= '' and not fs.statSync(self.undoPath)))
+    if not self.attached or self.undoPath == '' then
+        return false
+    end
+    if self.isDirty or not fs.statSync(self.undoPath) then
+        return true
+    end
+    -- If the archive is missing but Neovim successfully loaded a non-empty
+    -- native undo tree, save the matching file contents. Without this, a later
+    -- out-of-process edit (while Neovim is closed) leaves us with no fallback
+    -- content to replay the undo file against.
+    return not fs.statSync(self.fallbackPath) and not self:isEmpty()
 end
 
 function Undo:transfer()
