@@ -15,6 +15,8 @@ local log = require('fundo.lib.log')
 local path = require('fundo.fs.path')
 local mutex = require('fundo.lib.mutex')
 
+local archiveDirMode = 448 -- 0o700
+
 ---@class FundoManager
 ---@field initialized boolean
 ---@field undos table<number, FundoUndo>
@@ -187,8 +189,8 @@ function Manager:initialize()
     end
     self.archivesDir = path.normalize(config.archives_dir)
     self.limitArchivesSize = config.limit_archives_size
-    -- convert 0o755 to decimal base
-    fs.mkdirpSync(self.archivesDir, 493)
+    fs.mkdirpSync(self.archivesDir, archiveDirMode)
+    fs.chmodSync(self.archivesDir, archiveDirMode)
     self.undos = {}
     self.lastScannedtime = uv.hrtime()
     self.mutex = mutex:new()
