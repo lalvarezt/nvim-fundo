@@ -43,7 +43,7 @@ local function createCommand()
 end
 
 function M.enable()
-    log.debug('enable requested')
+    log.trace('enable requested')
     if enabled then
         log.debug('enable skipped; already enabled')
         return false
@@ -66,7 +66,7 @@ function M.enable()
 end
 
 function M.disable()
-    log.debug('disable requested')
+    log.trace('disable requested')
     if not enabled then
         log.debug('disable skipped; already disabled')
         return false

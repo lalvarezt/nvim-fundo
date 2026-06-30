@@ -55,4 +55,20 @@ describe('log module.', function()
         assert.True(log.isEnabled('debug'))
         assert.equal('debug', log.level())
     end)
+
+    it('keeps each write on one line without trailing whitespace.', function()
+        local logfile = tmpdir .. path.sep .. 'format.log'
+        log.configure({enabled = true, level = 'debug', path = logfile})
+
+        log.debug('empty value:', '')
+        log.debug('table value:', {nested = {status = 'fulfilled'}})
+
+        local lines = vim.fn.readfile(logfile)
+        assert.equal(2, #lines)
+        assert.True(lines[1]:find('empty value: ""', 1, true) ~= nil)
+        assert.True(lines[2]:find('table value: { nested = { status = "fulfilled" } }', 1, true) ~= nil)
+        assert.True(lines[2]:find('\\n', 1, true) == nil)
+        assert.False(lines[1]:match('%s$') ~= nil)
+        assert.False(lines[2]:match('%s$') ~= nil)
+    end)
 end)
