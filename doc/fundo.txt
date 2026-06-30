@@ -45,6 +45,11 @@ Default configuration:                                 *nvim-fundo-default-confi
     {
         archives_dir = vim.fn.stdpath('cache') .. path.separator .. 'fundo',
         limit_archives_size = 512,
+        logging = {
+            enabled = false,
+            level = 'warn',
+            path = vim.fn.stdpath('cache') .. path.separator .. 'fundo.log',
+        },
     }
 <
 
@@ -58,6 +63,26 @@ Default configuration:                                 *nvim-fundo-default-confi
         Maximum archive directory size in MB. When the size is exceeded, older
         archives are pruned by modified time. This value is also the maximum
         individual file size Fundo will copy as a baseline snapshot.
+
+                                                        *fundo-logging*
+`logging`~
+        Logging configuration. Logging is disabled by default. When enabled,
+        Fundo writes lifecycle, sync, archive, baseline, and failure events to
+        the configured log file. You can also set `FUNDO_LOG` to one of the
+        supported level names to enable logging without changing setup config.
+
+                                                        *fundo-logging-enabled*
+`logging.enabled`~
+        Boolean. Enables or disables log writes. Defaults to `false`.
+
+                                                        *fundo-logging-level*
+`logging.level`~
+        Minimum log level to write. Supported values are `trace`, `debug`,
+        `info`, `warn`, and `error`. Defaults to `warn`.
+
+                                                        *fundo-logging-path*
+`logging.path`~
+        Log file path. Defaults to `stdpath('cache')/fundo.log`.
 
 ==============================================================================
 UNDO PRESERVATION                                             *fundo-behavior*
