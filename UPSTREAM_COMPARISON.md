@@ -5,8 +5,6 @@ Comparison scope:
 - Current branch compared with `upstream/main`.
 - The purpose of this document is to explain what changed and why each change exists.
 
-This branch is no longer a small patch on top of upstream. It vendors a runtime dependency, changes the undo preservation state machine, adds failure handling, and adds a real test suite for the data-loss cases that motivated the fork.
-
 The standard for keeping a divergence should be strict:
 
 - It directly supports the main goal: preserve the undo tree when file contents change outside Neovim, including while Neovim is closed.
@@ -51,16 +49,6 @@ Why it exists:
 - It makes tests and local development deterministic.
 - It matches the stated fork direction: own every component that can affect preservation.
 
-Keep if:
-
-- We accept responsibility for auditing and updating vendored async/promise code.
-- The vendored commit remains documented.
-- License text stays in the repo.
-
-Reconsider if:
-
-- The fork is expected to remain close to upstream or consume upstream dependency updates automatically.
-
 ### Reloadable setup/config
 
 Files:
@@ -79,10 +67,6 @@ Why it exists:
 - Tests and users can call `setup()` repeatedly with different `archives_dir` and `limit_archives_size` values.
 - Repeated setup is required by the integration tests because each test uses isolated temp directories.
 
-Keep:
-
-- This is justified and covered by `spec/config_spec.lua`.
-
 ### Attach already-loaded buffers
 
 File:
@@ -97,10 +81,6 @@ Why it exists:
 
 - Plugin managers can load Fundo after buffers already exist.
 - Without this, those buffers would not be tracked until another event happened.
-
-Keep:
-
-- This directly supports preservation for lazy-loaded setups.
 
 ### Preserve across unload, wipeout, and closed Neovim
 
@@ -126,11 +106,6 @@ Why it exists:
 - Same-process tests can pass while the real lifecycle still loses undo history.
 - Synchronous transfer at unload/exit is appropriate because preserving state is more important than avoiding a small blocking operation.
 
-Keep:
-
-- This is the central reason for the fork.
-- The subprocess tests prove linear undo, branched undo trees, repeated outside/inside/outside edits, and safe handling of missing/corrupted artifacts.
-
 ### Handle external file changes while buffers remain loaded
 
 Files:
@@ -150,10 +125,6 @@ Why it exists:
 
 - External tools can modify files while Neovim is still running.
 - The plugin must preserve undo history for both open-buffer and closed-session external edits.
-
-Keep:
-
-- This supports the same preservation goal from a different lifecycle.
 
 ### Atomic native undo/fallback archive transfer
 
@@ -177,11 +148,6 @@ Why it exists:
 - The previous fork behavior could copy a new archive after a failed `wundo`, then mark the buffer clean.
 - Silent success here is worse than an explicit failure because it hides a data-loss condition.
 
-Keep:
-
-- This is required for correctness.
-- Regression tests cover failed native undo save, failed archive copy, failed fallback undo load, and failed async sync.
-
 ### Fallback repair only succeeds when `rundo` succeeds
 
 Files:
@@ -199,10 +165,6 @@ Why it exists:
 
 - Replaying fallback file content without loading the matching undo tree is not a repaired undo history.
 - Reporting success after failed `rundo` can lead later transfer paths to overwrite useful artifacts.
-
-Keep:
-
-- This closes a real consistency hole.
 
 ### Archive pruning and filesystem hardening
 
@@ -226,10 +188,6 @@ Why it exists:
 - Synchronous transfer needs synchronous copy support.
 - Pruning should not break preservation because one stale archive cannot be removed.
 
-Keep:
-
-- These support the preservation state machine and are tested.
-
 ### Path normalization fixes
 
 Files:
@@ -251,10 +209,6 @@ Why it exists:
 
 - Archive path calculation depends on predictable path utilities.
 - The earlier forked normalization was wrong for unresolved parents and paths above root.
-
-Keep:
-
-- Keep the fixed behavior and tests.
 
 ## Test coverage added for these changes
 
@@ -291,7 +245,7 @@ Current verification:
 | --- | --- |
 | `LICENSE.promise-async` | Required license for vendored runtime. |
 | `Makefile` | Stops installing external `promise-async`; improves Lua version target selection. |
-| `README.md` | Documents vendored dependency; should remove no-op install hook unless needed. |
+| `README.md` | Documents vendored dependency; no longer advertises the no-op install hook. |
 | `lua/async.lua` | Vendored async entrypoint. |
 | `lua/promise.lua` | Vendored promise runtime. |
 | `lua/promise-async/*` | Vendored compatibility/runtime support. |
@@ -315,132 +269,61 @@ Current verification:
 
 Most of the divergence has a coherent reason: protect the native undo/fallback archive pair across external edits and process restarts. The critical keepers are the atomic transfer semantics, fallback repair correctness, unload/exit persistence, and subprocess tests.
 
-## Things to analyze later for potential removal or recheck
+## Utility audit log
 
-These items are not necessarily wrong, but their reason is weaker than the core undo-preservation changes. They should not become permanent by inertia.
+### 2026-06-30
 
-### Event emitter catches listener failures
+Baseline before this audit:
 
-Files:
+- `make test`: 76 successes / 0 failures / 0 errors.
 
-- `lua/fundo/lib/event.lua`
-- `spec/event_spec.lua`
+Verification after this audit:
 
-What changed:
+- `make test BUSTED_ARGS=spec/config_spec.lua`: 1 success / 0 failures / 0 errors.
+- `make test BUSTED_ARGS=spec/event_spec.lua`: 3 successes / 0 failures / 0 errors.
+- `make test BUSTED_ARGS=spec/fs_spec.lua`: 12 successes / 0 failures / 0 errors.
+- `make test BUSTED_ARGS=spec/fundo_spec.lua`: 28 successes / 0 failures / 0 errors.
+- `make test BUSTED_ARGS=spec/path_spec.lua`: 26 successes / 0 failures / 0 errors.
+- `make test BUSTED_ARGS=spec/session_spec.lua`: 4 successes / 0 failures / 0 errors.
+- `make test`: 80 successes / 0 failures / 0 errors.
 
-- `Event:emit()` snapshots listeners before iteration.
-- It catches listener errors and logs them instead of stopping later listeners.
+Changes made:
 
-Why it may exist:
+- Removed `run = function() require('fundo').install() end` from README install examples.
+- Kept `require('fundo').install()` as a compatibility shim and documented that vendored dependencies mean it has no current install-time work.
+- Added event-emitter coverage that verifies listener failures are logged while later listeners still run.
+- Added filesystem coverage that verifies `copyFileSync()` removes temporary files when rename fails.
+- Added integration coverage for buffers loaded before `setup()`, invalid archive-directory setup, and failed detach transfer state.
+- Fixed `Manager:detach()` so a failed synchronous archive transfer does not dispose and remove the tracked undo object.
+- Fixed `Undo:shouldTransfer()` so missing-fallback checks do not call non-fast Neovim APIs from fast-event async paths.
+- Fixed setup failure handling so a bad archive path does not leave the manager initialized or leak event handlers from a partial enable.
 
-- One failing listener should not prevent cleanup/persistence listeners from running.
-- A listener disposing itself during emit should not corrupt iteration.
+Decisions:
 
-Concern:
+- Remove: README install hook. It was misleading because the vendored runtime requires no install step.
+- Keep: runtime `install()` symbol, but only as a compatibility shim for existing configs.
+- Keep: vendored `promise-async` as a deterministic supply/test dependency, not as a local behavior patch.
+- Keep: repeated setup/config reload. `spec/config_spec.lua` covers changing `archives_dir` and `limit_archives_size` on repeated setup.
+- Keep: attaching already-loaded buffers. `spec/fundo_spec.lua` now proves a file opened before `setup()` is tracked and preserves undo after an external edit.
+- Keep: `BufUnload`, `BufWipeout`, `VimLeave`, and `VimSuspend` sync behavior. Existing integration and closed-session tests cover these preservation paths.
+- Keep: `FileChangedShellPost`. The loaded-buffer external-change test covers `:checktime` restoring file content and undo history.
+- Keep/Fix: archive transfer and fallback repair semantics. The audit found that failed detach transfer used to drop the undo object; it now stays tracked and dirty for retry.
+- Keep/Fix: event listener isolation. Listener failures remain isolated, and tests now prove they are observable via logging.
+- Experiment needed: `CmdlineEnter` sync. No new evidence was added in this pass; keep it pending a scenario or performance check.
+- Keep current path exports. `basename`, `dirname`, `normalize`, and `join` all have production callers, so the scope risk is future expansion rather than currently unused code.
 
-- This can hide internal bugs during development because events no longer fail loudly.
+Vendored runtime evidence:
 
-Analyze later:
+- Compared local vendored files against `kevinhwang91/promise-async` commit `119e8961014c9bfaf1487bf3c2a393d254f337e2`.
+- `lua/promise.lua`: identical.
+- `lua/async.lua`: identical.
+- `lua/promise-async/compat.lua`: identical.
+- `lua/promise-async/error.lua`: identical.
+- `lua/promise-async/loop.lua`: identical.
+- `lua/promise-async/utils.lua`: identical.
+- Conclusion: vendoring is currently a packaging/determinism decision. There are no local runtime modifications to audit separately.
 
-- Decide whether production should swallow listener failures but tests/debug mode should rethrow them.
-- Confirm that important persistence failures are still observable despite event-level `pcall`.
+Known remaining audit questions:
 
-### README still shows a no-op install hook
-
-Files:
-
-- `README.md`
-- `lua/fundo.lua`
-
-What changed:
-
-- The README no longer lists `promise-async` as an external requirement.
-- It still shows `run = function() require('fundo').install() end`.
-- `M.install()` is reserved and currently does nothing.
-
-Why it may exist:
-
-- It preserves upstream installation shape.
-- It leaves a future hook for generated help docs or setup work.
-
-Concern:
-
-- A no-op install hook is misleading now that the vendored runtime requires no install step.
-
-Analyze later:
-
-- Remove the `run = ... install()` snippet unless there is a concrete install-time behavior planned.
-- If `install()` remains, document what future work it is reserved for.
-
-### Sync on command-line entry
-
-Files:
-
-- `lua/fundo/main.lua`
-- `lua/fundo/manager.lua`
-
-What changed:
-
-- This behavior mostly existed upstream, but it remains part of the forked state machine.
-
-Why it may exist:
-
-- It can flush undo/archive state before a user runs commands that may trigger shell tools or external modifications.
-
-Concern:
-
-- It may perform more background sync attempts than necessary.
-
-Analyze later:
-
-- Profile whether command-line entry sync has measurable overhead.
-- Keep it only if it prevents a real external-edit race or costs effectively nothing.
-
-### Custom path module scope
-
-Files:
-
-- `lua/fundo/fs/path.lua`
-- `spec/path_spec.lua`
-
-What changed:
-
-- The path module now has more behavior than upstream, especially around Windows drives, unresolved parent traversal, absolute roots, and join normalization.
-
-Why it may exist:
-
-- Fundo needs deterministic archive paths on Unix and Windows.
-
-Concern:
-
-- This could drift into a general-purpose path library that the plugin does not need.
-
-Analyze later:
-
-- Keep only path behavior needed for archive naming, config expansion, and tests.
-- Remove or simplify path behavior that has no caller.
-
-### Vendored runtime modifications
-
-Files:
-
-- `lua/promise.lua`
-- `lua/async.lua`
-- `lua/promise-async/*`
-
-What changed:
-
-- The async/promise runtime is vendored into the plugin.
-
-Why it may exist:
-
-- Owning the runtime removes dependency installation as a source of variation.
-
-Concern:
-
-- Local modifications to vendored code would make future audits difficult.
-
-Analyze later:
-
-- Verify the vendored files match the documented upstream dependency commit.
-- If local changes are necessary, isolate and document them separately from the vendored import.
+- `CmdlineEnter` sync still needs a targeted scenario showing that it prevents a real external-edit race, or a performance check showing that its extra background sync attempts are negligible.
+- Path helper behavior should not expand beyond archive naming, config path normalization, Windows/root handling, and parent traversal safety without new production callers and tests.

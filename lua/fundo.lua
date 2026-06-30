@@ -22,7 +22,8 @@ function M.setup(opts)
     M.enable()
 end
 
----Reserved
+---Compatibility shim for older install snippets. Dependencies are vendored, so
+---there is currently no install-time work to perform.
 function M.install()
 end
 

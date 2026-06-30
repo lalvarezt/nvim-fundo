@@ -91,6 +91,15 @@ describe('fs module on Unix.', function()
             assert.equal('string', type(msg))
             assert.same({}, vim.fn.glob(dirTarget .. '.__*', false, true))
         end)
+        it('removes the temporary copy when sync target cannot be renamed', function()
+            local dirTarget = path.join(samplePath, 'empty_dir')
+
+            local ok, msg = pcall(fs.copyFileSync, path.join(samplePath, 'foo.txt'), dirTarget)
+
+            assert.False(ok)
+            assert.equal('string', type(msg))
+            assert.same({}, vim.fn.glob(dirTarget .. '.__*', false, true))
+        end)
     end)
     describe('synchronous mkdirp,', function()
         local nestedPath

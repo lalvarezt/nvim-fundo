@@ -28,8 +28,7 @@ Install with [Packer.nvim](https://github.com/wbthomason/packer.nvim):
 
 ```lua
 use {
-    'kevinhwang91/nvim-fundo',
-    run = function() require('fundo').install() end
+    'kevinhwang91/nvim-fundo'
 }
 ```
 
@@ -37,8 +36,7 @@ use {
 
 ```lua
 use {
-    'kevinhwang91/nvim-fundo',
-    run = function() require('fundo').install() end
+    'kevinhwang91/nvim-fundo'
 }
 
 vim.o.undofile = true

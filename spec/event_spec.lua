@@ -23,6 +23,31 @@ describe('event.', function()
         assert.True(called)
     end)
 
+    it('logs listener failures while continuing to emit.', function()
+        local log = require('fundo.lib.log')
+        local errorLog = log.error
+        local logged
+        local called = false
+
+        log.error = function(...)
+            logged = {...}
+        end
+        event:on('TestEvent', function()
+            error('listener failed')
+        end)
+        event:on('TestEvent', function()
+            called = true
+        end)
+
+        event:emit('TestEvent')
+        log.error = errorLog
+
+        assert.True(called)
+        assert.same('event listener failed:', logged[1])
+        assert.same('TestEvent', logged[2])
+        assert.truthy(tostring(logged[3]):match('listener failed'))
+    end)
+
     it('continues emitting when a listener unregisters itself.', function()
         local disposed
         local called = false

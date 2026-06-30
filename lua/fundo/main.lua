@@ -44,9 +44,17 @@ function M.enable()
         return false
     end
     createCommand()
-    disposables = {}
-    table.insert(disposables, createEvents())
-    table.insert(disposables, manager:initialize())
+    local pending = {}
+    local ok, err = pcall(function()
+        table.insert(pending, createEvents())
+        table.insert(pending, manager:initialize())
+    end)
+    if not ok then
+        disposable.disposeAll(pending)
+        disposables = {}
+        error(err)
+    end
+    disposables = pending
     enabled = true
     return true
 end

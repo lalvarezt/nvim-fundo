@@ -172,11 +172,16 @@ function Undo:shouldTransfer()
     if self.isDirty or not fs.statSync(self.undoPath) then
         return true
     end
-    -- If the archive is missing but Neovim successfully loaded a non-empty
-    -- native undo tree, save the matching file contents. Without this, a later
-    -- out-of-process edit (while Neovim is closed) leaves us with no fallback
-    -- content to replay the undo file against.
-    return not fs.statSync(self.fallbackPath) and not self:isEmpty()
+    if fs.statSync(self.fallbackPath) then
+        return false
+    end
+    -- If the archive is missing but Neovim successfully loaded a native undo
+    -- tree, save the matching file contents. Avoid inspecting the undo list in
+    -- fast-event async paths because that requires non-fast Neovim APIs.
+    if type(vim.in_fast_event) == 'function' and vim.in_fast_event() then
+        return true
+    end
+    return not self:isEmpty()
 end
 
 function Undo:transfer()

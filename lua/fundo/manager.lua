@@ -30,8 +30,6 @@ function Manager:detach(bufnr)
         end)
         if not ok then
             pcall(log.warn, 'failed to transfer undo archive for buffer', bufnr, err)
-            u:dispose()
-            self.undos[bufnr] = nil
             return false, err
         end
         u:dispose()
@@ -151,7 +149,6 @@ function Manager:initialize()
     if self.initialized then
         return self
     end
-    self.initialized = true
     self.archivesDir = path.normalize(config.archives_dir)
     self.limitArchivesSize = config.limit_archives_size
     -- convert 0o755 to decimal base
@@ -160,6 +157,7 @@ function Manager:initialize()
     self.lastScannedtime = uv.hrtime()
     self.mutex = mutex:new()
     self.disposables = {}
+    self.initialized = true
     table.insert(self.disposables, disposable:create(function()
         for _, b in pairs(self.undos) do
             b:dispose()

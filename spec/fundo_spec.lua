@@ -173,6 +173,30 @@ describe('fundo integration.', function()
         assert_history_restores_to({'one', 'two'})
     end)
 
+    it('tracks buffers that were loaded before setup.', function()
+        require('fundo').disable()
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
+        vim.cmd('write')
+
+        require('fundo').setup({
+            archives_dir = archivesDir,
+            limit_archives_size = 16,
+        })
+        local u = manager:get(api.nvim_get_current_buf())
+        assert.truthy(u, 'expected setup to attach the already-loaded file buffer')
+        sync_all()
+
+        assert.are_not.equal(0, #archives())
+
+        fn.writefile({'external', 'change'}, file)
+        vim.cmd('checktime')
+        assert.same({'external', 'change'}, buffer_lines())
+
+        assert_history_restores_to({'one', 'two'})
+    end)
+
     describe('modification combinations.', function()
         local close_scenarios = {
             {
@@ -365,7 +389,25 @@ describe('fundo integration.', function()
         assert.equal('directory', fs.statSync(nestedArchivesDir).type)
     end)
 
-    it('detaches a buffer even when fallback archive transfer fails.', function()
+    it('fails setup when the configured archive path is not a directory.', function()
+        local invalidArchivesDir = path.join(tmpdir, 'archive-file')
+        fn.writefile({'not a directory'}, invalidArchivesDir)
+
+        local ok, err = pcall(require('fundo').setup, {
+            archives_dir = invalidArchivesDir,
+            limit_archives_size = 16,
+        })
+
+        require('fundo').setup({
+            archives_dir = archivesDir,
+            limit_archives_size = 16,
+        })
+
+        assert.False(ok)
+        assert.truthy(tostring(err):match('director'))
+    end)
+
+    it('keeps a buffer tracked when fallback archive transfer fails during detach.', function()
         local fs = require('fundo.fs')
         local copyFileSync = fs.copyFileSync
 
@@ -383,7 +425,9 @@ describe('fundo integration.', function()
 
         assert.False(ok)
         assert.truthy(tostring(err):match('archive write failed'))
-        assert.Nil(manager:get(bufnr))
+        local u = manager:get(bufnr)
+        assert.truthy(u, 'expected failed detach to leave the undo object available for retry')
+        assert.True(u.isDirty)
     end)
 
     it('does not update the fallback archive when saving native undo fails.', function()
