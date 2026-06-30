@@ -29,6 +29,17 @@ describe('fundo integration.', function()
         end
     end
 
+    local function fundo_autocmd_count(event_name)
+        local ok, autocmds = pcall(api.nvim_get_autocmds, {
+            group = 'Fundo',
+            event = event_name,
+        })
+        if not ok then
+            return 0
+        end
+        return #autocmds
+    end
+
     local function assert_history_restores_to(expected, redo_expected)
         redo_expected = redo_expected or {'external', 'change'}
         local undolist = api.nvim_exec('undolist', true)
@@ -229,6 +240,17 @@ describe('fundo integration.', function()
 
         assert.same({'one'}, buffer_lines())
         assert_history_restores_to({'one', 'two', 'three'}, {'one'})
+    end)
+
+    it('restores undo history for paths with spaces and shell-special characters.', function()
+        file = path.join(tmpdir, 'sample with spaces [hash#].txt')
+        open_file_with_history({'one'}, {'one', 'two'})
+
+        external_write({'external', 'change'})
+        vim.cmd('checktime')
+
+        assert.same({'external', 'change'}, buffer_lines())
+        assert_history_restores_to({'one', 'two'})
     end)
 
     it('restores undo history after multiple external edits before one checktime.', function()
@@ -509,10 +531,11 @@ describe('fundo integration.', function()
         vim.cmd('bwipeout!')
 
         local archives = fn.glob(path.join(archivesDir, '*'), false, true)
-        assert.equal(2, #archives)
+        assert.equal(4, #archives)
 
-        uv.fs_utime(archives[1], 100, 100)
-        uv.fs_utime(archives[2], 200, 200)
+        for i, archive in ipairs(archives) do
+            uv.fs_utime(archive, 100 * i, 100 * i)
+        end
 
         async(function()
             await(manager:scanArchivesDir())
@@ -522,7 +545,7 @@ describe('fundo integration.', function()
 
         local remaining = fn.glob(path.join(archivesDir, '*'), false, true)
         assert.equal(1, #remaining)
-        assert.equal(archives[2], remaining[1])
+        assert.equal(archives[4], remaining[1])
     end)
 
     it('does not fail the prune scan when an archive cannot be removed.', function()
@@ -574,6 +597,35 @@ describe('fundo integration.', function()
 
         assert.False(ok)
         assert.truthy(tostring(err):match('director'))
+    end)
+
+    it('recovers cleanly after setup fails with an invalid archive path.', function()
+        local invalidArchivesDir = path.join(tmpdir, 'archive-file')
+        fn.writefile({'not a directory'}, invalidArchivesDir)
+
+        local ok = pcall(require('fundo').setup, {
+            archives_dir = invalidArchivesDir,
+            limit_archives_size = 16,
+        })
+
+        assert.False(ok)
+        assert.equal(0, fundo_autocmd_count('BufReadPost'))
+        assert.equal(0, fundo_autocmd_count('FileChangedShellPost'))
+
+        require('fundo').setup({
+            archives_dir = archivesDir,
+            limit_archives_size = 16,
+        })
+
+        assert.equal(1, fundo_autocmd_count('BufReadPost'))
+        assert.equal(1, fundo_autocmd_count('FileChangedShellPost'))
+
+        open_file_with_history({'one'}, {'one', 'two'})
+        external_write({'external', 'change'})
+        vim.cmd('checktime')
+
+        assert.same({'external', 'change'}, buffer_lines())
+        assert_history_restores_to({'one', 'two'})
     end)
 
     it('keeps a buffer tracked when fallback archive transfer fails during detach.', function()

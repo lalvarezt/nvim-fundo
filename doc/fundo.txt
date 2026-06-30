@@ -1,15 +1,143 @@
-*fundo.txt*
-*nvimfundo.txt*
-*nvim-fundo.txt*
+*fundo.txt* *nvimfundo.txt* *nvim-fundo.txt*
 
-type `gf` or `CTRL-W gf` under the PATH value :)
+==============================================================================
+CONTENTS                                                         *fundo-contents*
 
-`URL`: https://github.com/kevinhwang91/nvim-fundo
+  1. Introduction                                             |fundo-introduction|
+  2. Setup                                                           |fundo-setup|
+  3. Configuration                                           |fundo-configuration|
+  4. Undo preservation                                           |fundo-behavior|
+  5. Troubleshooting                                      |fundo-troubleshooting|
+  6. API                                                               |fundo-api|
 
-`PATH`: ../README.md
+==============================================================================
+INTRODUCTION                                                 *fundo-introduction*
 
-`PATH`: ../lua/fundo/config.lua |nvim-fundo-default-config|
+nvim-fundo makes Neovim's persistent undo files more stable when file contents
+change outside Neovim.
 
-`PATH`: ../lua/fundo.lua |nvim-fundo-api|
+Neovim stores undo history in native undo files. Fundo does not replace that
+undo engine. If the file on disk no longer matches that native undo file,
+Neovim may be unable to use the previous undo tree. Fundo keeps fallback
+archives of recent file contents so the file and its native undo file can be
+replayed as a matching pair.
 
-vim:ft=help
+Fundo also keeps a size-limited baseline snapshot for cases where no usable
+native undo file is available. If a file later changes while Neovim is closed
+and Fundo cannot load native undo, Fundo uses that baseline only to create one
+normal native undo step from the previous file contents to the current file
+contents.
+
+==============================================================================
+SETUP                                                               *fundo-setup*
+
+Enable Neovim undo files and call setup:
+>
+    vim.o.undofile = true
+    require('fundo').setup()
+<
+
+==============================================================================
+CONFIGURATION                                               *fundo-configuration*
+
+Default configuration:                                 *nvim-fundo-default-config*
+>
+    {
+        archives_dir = vim.fn.stdpath('cache') .. path.separator .. 'fundo',
+        limit_archives_size = 512,
+    }
+<
+
+                                                        *fundo-archives_dir*
+`archives_dir`~
+        Directory used to store fallback file-content archives and baseline
+        snapshots.
+
+                                                        *fundo-limit_archives_size*
+`limit_archives_size`~
+        Maximum archive directory size in MB. When the size is exceeded, older
+        archives are pruned by modified time. This value is also the maximum
+        individual file size Fundo will copy as a baseline snapshot.
+
+==============================================================================
+UNDO PRESERVATION                                             *fundo-behavior*
+
+Fundo preserves undo history by keeping Neovim's native undo file and Fundo's
+fallback archive in sync. Both artifacts are treated as a pair. A separate
+baseline snapshot is used only when no usable native undo file is available.
+
+Supported external-change cases:
+
+- File changed while Neovim is closed:
+  Fundo validates and repairs the undo file on the next `BufReadPost`.
+
+- File changed while Neovim was closed and no native undo file is usable:
+  Fundo creates one native undo step from the baseline snapshot to the current
+  file contents. The baseline then advances after the repaired state is
+  persisted.
+
+- File changed while Neovim was closed and the fallback archive is missing:
+  If a native undo file still exists, Fundo does not replace that richer history
+  with a baseline-only step.
+
+- Clean loaded buffer changed outside Neovim:
+  `:checktime` lets Neovim reload the file and emit `FileChangedShellPost`.
+  Fundo then restores the previous undo history around the new file contents.
+
+- Dirty loaded buffer changed outside Neovim:
+  Neovim keeps the unsaved buffer unchanged. Fundo does not replace dirty buffer
+  contents with external changes.
+
+- External overwrite, append, and truncate:
+  These are treated as file-content changes and can be repaired when the matching
+  native undo file and fallback archive are available.
+
+Fundo also syncs dirty undo state during lifecycle events such as `BufUnload`,
+`VimLeave`, `VimSuspend`, `TermEnter`, and `FocusLost`.
+
+File moves are not a complete recovery guarantee. Fundo tracks the path Neovim
+reports for a buffer and follows paths changed with `:saveas`, but arbitrary
+external move/rename recovery is still future work.
+
+==============================================================================
+TROUBLESHOOTING                                          *fundo-troubleshooting*
+
+No undo history after an external change~
+        The native undo file and fallback archive must match. If the fallback
+        archive is missing while a native undo file exists, Fundo fails safely
+        instead of replacing that history with a baseline-only step. If no usable
+        native undo file is available, a baseline snapshot can provide one native
+        undo step when the file fits `limit_archives_size`. A corrupted native
+        undo file may still make Neovim abort the edit before Fundo can repair
+        the buffer.
+
+Archive directory uses disk space~
+        This is expected. Lower `limit_archives_size` to prune old fallback
+        archives and baseline snapshots more aggressively. Files larger than the
+        limit are skipped for baseline snapshots, and stale baselines are removed
+        when the current file no longer fits.
+
+Archive directory was deleted~
+        Fundo recreates the configured archive directory when syncing undo state.
+
+Dirty buffer was not replaced by an external file change~
+        This is Neovim's safe behavior for modified buffers. Write, reload, or
+        discard the buffer explicitly after reviewing the change.
+
+==============================================================================
+API                                                                 *fundo-api*
+
+                                                        *fundo.setup()*
+`require('fundo').setup({opts})`~
+        Configure and enable Fundo. Calling setup repeatedly reloads the
+        configuration and restarts the plugin.
+
+                                                        *fundo.enable()*
+`require('fundo').enable()`~
+        Enable Fundo with the current configuration.
+
+                                                        *fundo.disable()*
+`require('fundo').disable()`~
+        Disable Fundo and dispose its event handlers.
+
+vim:tw=78:ts=8:ft=help:norl:

@@ -15,12 +15,12 @@ Neovim is closed.
 
 ## High-level diff
 
-The current branch changes 24 files relative to `upstream/main`:
+The current branch changes 31 files relative to `upstream/main`:
 
 - Adds vendored `promise-async` runtime files and license.
 - Changes setup/config reload behavior.
 - Adds new autocmd handling for `BufUnload` and `FileChangedShellPost`.
-- Changes undo archive transfer and fallback repair semantics.
+- Changes undo archive transfer, fallback repair, and baseline snapshot semantics.
 - Hardens file-copy, archive-pruning, path-normalization, and event-emission helpers.
 - Adds integration, subprocess, and utility tests.
 
@@ -152,6 +152,38 @@ state.
 - The previous fork behavior could copy a new archive after a failed `wundo`, then mark the buffer clean.
 - Silent success here is worse than an explicit failure because it hides a data-loss condition.
 
+### Baseline snapshots when native undo is unavailable
+
+Files:
+
+- `lua/fundo/model/undo.lua`
+- `spec/session_spec.lua`
+- `spec/helper/session.lua`
+- `README.md`
+- `doc/fundo.txt`
+
+What changed:
+
+- `Undo:reset()` now derives a separate `.base` path beside the fallback archive.
+- Files can save a size-limited baseline snapshot while no repair is needed.
+- When a file later changes while Neovim is closed and no usable native undo file is available, Fundo uses the baseline
+to create one normal native undo step from baseline contents to current contents.
+- If a native undo file exists but the matching fallback archive is missing, Fundo does not replace that richer history
+with a baseline-only step.
+- Baseline snapshots are advanced after successful native undo/fallback persistence.
+- Oversized current files remove stale baselines instead of keeping an unsafe prior snapshot.
+- `limit_archives_size` now also gates individual baseline snapshot creation, not only total archive pruning.
+
+Why it exists:
+
+- Native undo cannot represent the transition from a clean first-opened file to an external edit that happened while
+Neovim was closed, because no edit ever created an undo tree.
+- A missing native undo file also leaves no rich native history to protect, so baseline recovery is better than no undo.
+- Treating the fallback archive as a baseline would incorrectly trust stale fallback artifacts after failed native undo
+repair.
+- A corrupted native undo file can still make Neovim abort `:edit` before Fundo gets a chance to bridge from baseline.
+- The baseline bridge keeps Neovim as the undo engine: after the bridge, `undo` and `redo` are normal native operations.
+
 ### Fallback repair only succeeds when `rundo` succeeds
 
 Files:
@@ -230,9 +262,11 @@ Why it exists:
 | Closed linear history                    | covered, strengthened in this pass | `spec/session_spec.lua` covers overwrite, append, truncate, empty overwrite, and multiple external overwrites while Neovim is closed.                                                                                                                   |
 | Closed branch history                    | covered, strengthened in this pass | Existing branch overwrite coverage remains; external append was added and verifies undo/redo branch shape.                                                                                                                                              |
 | Closed multi-external                    | added in this pass                 | Multiple external overwrites while closed reopen to the final version and undo to the prior internal state.                                                                                                                                             |
-| Missing native undo                      | covered, clarified in this pass    | With native undo missing, fallback-only recovery fails safely: no error and no false restored history claim.                                                                                                                                            |
-| Missing fallback archive                 | covered, clarified in this pass    | If the file is unchanged, `shouldTransfer()` recreates the fallback archive from native undo. After an external edit with the fallback missing, recovery fails safely because the native undo is no longer enough to repair.                            |
-| Corrupted/stale fallback archive         | added in this pass                 | A stale fallback archive is not accepted as a successful repair to unrelated stale content. Corrupted native undo still fails visibly.                                                                                                                  |
+| Closed clean first-open                  | added in this pass                 | A file opened and closed without edits gets a baseline snapshot; a later external edit reopens at current contents, native `undo` returns to the baseline, and `redo` returns to current.                                                               |
+| Baseline advancement and size limits     | added in this pass                 | Baselines advance after repaired state is persisted, are skipped for oversized files, and are removed when a current file no longer fits `limit_archives_size`.                                                                                         |
+| Missing native undo                      | covered, clarified in this pass    | With native undo missing, baseline recovery creates one native undo step back to the last baseline snapshot.                                                                                                                                            |
+| Missing fallback archive                 | covered, clarified in this pass    | If the file is unchanged, `shouldTransfer()` recreates the fallback archive from native undo. After an external edit with the fallback missing but native undo present, recovery fails safely rather than degrading to baseline-only history.           |
+| Corrupted/stale fallback archive         | added in this pass                 | A stale fallback archive is not accepted as a successful repair to unrelated stale content. Corrupted native undo on reopen still fails visibly before Fundo can repair.                                                                                |
 | Archive directory deleted while open     | added and fixed in this pass       | Transfer now recreates the archive parent directory before copying fallback content, using libuv-safe directory creation for fast-event paths.                                                                                                          |
 | Binary or invalid UTF-8 external content | deferred                           | Neovim text buffer semantics do not reliably preserve arbitrary bytes such as NUL; this needs a separate byte-oriented feasibility pass.                                                                                                                |
 
@@ -251,6 +285,9 @@ Important new coverage:
   - loaded-buffer external edits
   - loaded-buffer external append, truncate, and multiple pending external edits
   - closed-session external append, truncate, empty overwrite, and multiple overwrites
+  - clean first-open external edits bridged through a baseline snapshot
+  - baseline advancement after repaired external changes are persisted
+  - baseline size-limit skip and stale-baseline removal
   - missing native undo file
   - missing fallback archive
   - closed Neovim followed by external edits
@@ -268,41 +305,75 @@ Important new coverage:
 Current verification:
 
 - `make test`
-- `98 successes / 0 failures / 0 errors / 0 pending`
+- `106 successes / 0 failures / 0 errors / 0 pending`
 
 ## File-by-file reason map
 
-| File                       | Reason to keep                                                                                     |
-|----------------------------|----------------------------------------------------------------------------------------------------|
-| `LICENSE.promise-async`    | Required license for vendored runtime.                                                             |
-| `Makefile`                 | Stops installing external `promise-async`; improves Lua version target selection.                  |
-| `README.md`                | Documents vendored dependency; no longer advertises the no-op install hook.                        |
-| `lua/async.lua`            | Vendored async entrypoint.                                                                         |
-| `lua/promise.lua`          | Vendored promise runtime.                                                                          |
-| `lua/promise-async/*`      | Vendored compatibility/runtime support.                                                            |
-| `lua/fundo.lua`            | Reloads config and restarts plugin on repeated setup.                                              |
-| `lua/fundo/config.lua`     | Mutates module config table on reload.                                                             |
-| `lua/fundo/main.lua`       | Adds unload and file-change events to the preservation lifecycle.                                  |
-| `lua/fundo/manager.lua`    | Attaches loaded buffers, persists on detach, reports transfer failures, prunes archives robustly.  |
-| `lua/fundo/model/undo.lua` | Implements fallback archive repair, atomic transfer, sync transfer, and failure-correct semantics. |
-| `lua/fundo/fs/init.lua`    | Adds atomic copy helpers, sync copy, and mkdirp support needed by persistence.                     |
-| `lua/fundo/fs/path.lua`    | Normalizes archive paths predictably across edge cases.                                            |
-| `lua/fundo/lib/event.lua`  | Makes event iteration robust; conditional keep due to swallowed errors.                            |
-| `spec/config_spec.lua`     | Covers repeated setup behavior.                                                                    |
-| `spec/event_spec.lua`      | Covers robust event emission.                                                                      |
-| `spec/fs_spec.lua`         | Covers fs helper hardening.                                                                        |
-| `spec/fundo_spec.lua`      | Covers core undo preservation and failure semantics in-process.                                    |
-| `spec/helper/session.lua`  | Provides real subprocess Neovim lifecycle tests.                                                   |
-| `spec/path_spec.lua`       | Covers path behavior added by the fork.                                                            |
-| `spec/session_spec.lua`    | Covers closed-Neovim external-edit preservation.                                                   |
+| File                            | Reason to keep                                                                                    |
+|---------------------------------|---------------------------------------------------------------------------------------------------|
+| `LICENSE.promise-async`         | Required license for vendored runtime.                                                            |
+| `Makefile`                      | Stops installing external `promise-async`; improves Lua version target selection.                 |
+| `README.md`                     | Documents vendored dependency, native undo/fallback behavior, and baseline snapshots.             |
+| `UPSTREAM_COMPARISON.md`        | Records which divergences from upstream are intentional and why they should stay.                 |
+| `doc/fundo.txt`                 | Documents native undo behavior, fallback archives, baseline snapshots, and size-limit semantics.  |
+| `lua/async.lua`                 | Vendored async entrypoint.                                                                        |
+| `lua/promise.lua`               | Vendored promise runtime.                                                                         |
+| `lua/promise-async/*`           | Vendored compatibility/runtime support.                                                           |
+| `lua/fundo.lua`                 | Reloads config and restarts plugin on repeated setup.                                             |
+| `lua/fundo/config.lua`          | Mutates module config table on reload.                                                            |
+| `lua/fundo/main.lua`            | Adds unload and file-change events to the preservation lifecycle.                                 |
+| `lua/fundo/manager.lua`         | Attaches loaded buffers, persists on detach, reports transfer failures, prunes archives robustly. |
+| `lua/fundo/model/undo.lua`      | Implements fallback archive repair, baseline snapshots, atomic transfer, and failure semantics.   |
+| `lua/fundo/fs/init.lua`         | Adds atomic copy helpers, sync copy, and mkdirp support needed by persistence.                    |
+| `lua/fundo/fs/path.lua`         | Normalizes archive paths predictably across edge cases.                                           |
+| `lua/fundo/lib/debounce.lua`    | Uses local uv-handle annotations so timer lifecycle code remains type-checkable.                  |
+| `lua/fundo/lib/event.lua`       | Makes event iteration robust; conditional keep due to swallowed errors.                           |
+| `lua/fundo/types.lua`           | Defines local uv handle/timer/idle annotations used by helper modules.                            |
+| `lua/fundo/utils.lua`           | Uses the local uv timer annotations for timeout helpers.                                          |
+| `spec/config_spec.lua`          | Covers repeated setup behavior.                                                                   |
+| `spec/event_spec.lua`           | Covers robust event emission.                                                                     |
+| `spec/fs_spec.lua`              | Covers fs helper hardening.                                                                       |
+| `spec/fundo_spec.lua`           | Covers core undo preservation, archive pruning, and failure semantics in-process.                 |
+| `spec/helper/outputHandler.lua` | Captures promise-loop unhandled errors without assuming direct table assignment semantics.        |
+| `spec/helper/session.lua`       | Provides real subprocess Neovim lifecycle tests with configurable archive size limits.            |
+| `spec/path_spec.lua`            | Covers path behavior added by the fork.                                                           |
+| `spec/semaphore_spec.lua`       | Keeps semaphore/mutex async specs aligned with the vendored async API.                            |
+| `spec/session_spec.lua`         | Covers closed-Neovim external-edit preservation, including baseline bridge behavior.              |
 
 ## Bottom line
 
-Most of the divergence has a coherent reason: protect the native undo/fallback archive pair across external edits and
-process restarts. The critical keepers are the atomic transfer semantics, fallback repair correctness, unload/exit
-persistence, and subprocess tests.
+Most of the divergence has a coherent reason: protect native undo across external edits and process restarts. The
+critical keepers are the atomic native undo/fallback pair semantics, fallback repair correctness, baseline bridge for
+files without an undo tree, unload/exit persistence, and subprocess tests.
 
 ## Utility audit log
+
+### 2026-06-30 baseline snapshot bridge
+
+Verification after baseline bridge implementation:
+
+- `make test`: 106 successes / 0 failures / 0 errors / 0 pending.
+- `make lint`: Diagnosis completed, no problems found.
+
+Changes made:
+
+- Added `.base` baseline snapshots as a separate artifact from fallback archives.
+- Restored `Undo:saveUndo()` to native-only `:wundo` persistence and removed the partial sentinel-line synthetic undo
+path.
+- Added baseline bridge behavior for clean first-opened files whose external edits happen while Neovim is closed.
+- Advanced baselines after successful native undo/fallback transfer and removed stale baselines when current files
+exceed `limit_archives_size`.
+- Added closed-session tests for baseline undo/redo, baseline advancement, unchanged files, size-limit skip, small-file
+baseline use, and stale-baseline removal.
+- Updated README and Vim help to document native undo, fallback archives, baseline snapshots, and size-limit semantics.
+
+Decisions:
+
+- Keep: `.base` snapshots live in `archives_dir` and participate in existing archive pruning.
+- Keep: fallback repair remains preferred and authoritative when a fallback archive exists.
+- Keep: missing native undo can use baseline recovery because no rich native undo file remains.
+- Keep: missing fallback while native undo exists still fails safely instead of degrading to baseline-only history.
+- Observed: corrupted native undo on reopen still fails visibly because Neovim aborts `:edit` before Fundo can repair.
 
 ### 2026-06-30
 

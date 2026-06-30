@@ -32,13 +32,15 @@ describe('closed Neovim sessions.', function()
         fn.delete(tmpdir, 'rf')
     end)
 
-    local function run(body)
+    local function run(body, opts)
+        opts = opts or {}
         return session.run({
             tmpdir = tmpdir,
             archives_dir = archivesDir,
             undo_dir = undoDir,
             file = file,
             body = body,
+            limit_archives_size = opts.limit_archives_size,
         })
     end
 
@@ -53,6 +55,211 @@ describe('closed Neovim sessions.', function()
             vim.cmd('quitall')
         ]])
     end
+
+    it('preserves clean opened file contents after an external edit while closed.', function()
+        fn.writefile({'one'}, file)
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('quitall')
+        ]])
+
+        fn.writefile({'external', 'change'}, file)
+        local report = map_report(run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
+            local entries_before = EntryCount()
+            local ok, err = pcall(vim.cmd, 'undo')
+            local undo = BufferText()
+            local redo_ok, redo_err = pcall(vim.cmd, 'redo')
+            WriteReport({
+                'before=' .. before,
+                'entries_before=' .. tostring(entries_before),
+                'undo_ok=' .. tostring(ok),
+                'undo_err=' .. tostring(err),
+                'undo=' .. undo,
+                'redo_ok=' .. tostring(redo_ok),
+                'redo_err=' .. tostring(redo_err),
+                'redo=' .. BufferText(),
+            })
+            vim.cmd('quitall!')
+        ]]).lines)
+
+        assert.equal('external|change', report.before)
+        assert.equal('true', report.undo_ok)
+        assert.equal('one', report.undo)
+        assert.equal('true', report.redo_ok)
+        assert.equal('external|change', report.redo)
+        assert.is_true(tonumber(report.entries_before) >= 1)
+    end)
+
+    it('advances the baseline after repaired external changes are persisted.', function()
+        fn.writefile({'one'}, file)
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('quitall')
+        ]])
+
+        fn.writefile({'two'}, file)
+        local first = map_report(run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
+            vim.cmd('undo')
+            local undo = BufferText()
+            vim.cmd('redo')
+            WriteReport({
+                'before=' .. before,
+                'undo=' .. undo,
+                'redo=' .. BufferText(),
+            })
+            vim.cmd('quitall')
+        ]]).lines)
+        assert.equal('two', first.before)
+        assert.equal('one', first.undo)
+        assert.equal('two', first.redo)
+
+        fn.writefile({'three'}, file)
+        local second = map_report(run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
+            vim.cmd('undo')
+            local undo = BufferText()
+            vim.cmd('redo')
+            WriteReport({
+                'before=' .. before,
+                'undo=' .. undo,
+                'redo=' .. BufferText(),
+            })
+            vim.cmd('quitall!')
+        ]]).lines)
+        assert.equal('three', second.before)
+        assert.equal('two', second.undo)
+        assert.equal('three', second.redo)
+    end)
+
+    it('does not create a synthetic undo step when current contents match the baseline.', function()
+        fn.writefile({'one'}, file)
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('quitall')
+        ]])
+
+        local report = map_report(run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
+            local ok, err = pcall(vim.cmd, 'undo')
+            WriteReport({
+                'before=' .. before,
+                'undo_ok=' .. tostring(ok),
+                'undo_err=' .. tostring(err),
+                'after=' .. BufferText(),
+            })
+            vim.cmd('quitall!')
+        ]]).lines)
+
+        assert.equal('one', report.before)
+        assert.equal('one', report.after)
+    end)
+
+    it('does not create a baseline for files larger than the archive size limit.', function()
+        fn.writefile({string.rep('x', 128)}, file)
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('quitall')
+        ]], {limit_archives_size = 0.00004})
+
+        assert.equal(0, #fn.glob(path.join(archivesDir, '*.base'), false, true))
+
+        fn.writefile({'external'}, file)
+        local report = map_report(run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
+            local ok, err = pcall(vim.cmd, 'undo')
+            WriteReport({
+                'before=' .. before,
+                'undo_ok=' .. tostring(ok),
+                'undo_err=' .. tostring(err),
+                'after=' .. BufferText(),
+            })
+            vim.cmd('quitall!')
+        ]], {limit_archives_size = 0.00004}).lines)
+
+        assert.equal('external', report.before)
+        assert.equal('external', report.after)
+    end)
+
+    it('creates and uses a baseline for files within the archive size limit.', function()
+        fn.writefile({'one'}, file)
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('quitall')
+        ]], {limit_archives_size = 0.001})
+
+        assert.equal(1, #fn.glob(path.join(archivesDir, '*.base'), false, true))
+
+        fn.writefile({'two'}, file)
+        local report = map_report(run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
+            vim.cmd('undo')
+            local undo = BufferText()
+            vim.cmd('redo')
+            WriteReport({
+                'before=' .. before,
+                'undo=' .. undo,
+                'redo=' .. BufferText(),
+            })
+            vim.cmd('quitall!')
+        ]], {limit_archives_size = 0.001}).lines)
+
+        assert.equal('two', report.before)
+        assert.equal('one', report.undo)
+        assert.equal('two', report.redo)
+    end)
+
+    it('drops the baseline when the current file no longer fits the archive size limit.', function()
+        fn.writefile({'one'}, file)
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('quitall')
+        ]], {limit_archives_size = 0.00004})
+        assert.equal(1, #fn.glob(path.join(archivesDir, '*.base'), false, true))
+
+        fn.writefile({string.rep('x', 128)}, file)
+        local oversized = map_report(run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
+            vim.cmd('undo')
+            local undo = BufferText()
+            vim.cmd('redo')
+            WriteReport({
+                'before=' .. before,
+                'undo=' .. undo,
+                'redo=' .. BufferText(),
+            })
+            vim.cmd('quitall')
+        ]], {limit_archives_size = 0.00004}).lines)
+        assert.equal(string.rep('x', 128), oversized.before)
+        assert.equal('one', oversized.undo)
+        assert.equal(string.rep('x', 128), oversized.redo)
+        assert.equal(0, #fn.glob(path.join(archivesDir, '*.base'), false, true))
+
+        fn.writefile({'three'}, file)
+        local report = map_report(run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
+            local ok, err = pcall(vim.cmd, 'undo')
+            WriteReport({
+                'before=' .. before,
+                'undo_ok=' .. tostring(ok),
+                'undo_err=' .. tostring(err),
+                'after=' .. BufferText(),
+            })
+            vim.cmd('quitall!')
+        ]], {limit_archives_size = 0.00004}).lines)
+
+        assert.equal('three', report.before)
+        assert.are_not.equal('one', report.after)
+    end)
 
     local function assert_linear_recovery(expected_before)
         local report = map_report(run([[
@@ -234,7 +441,7 @@ describe('closed Neovim sessions.', function()
         assert.is_true(tonumber(report.entries_after) >= 2)
     end)
 
-    it('fails safely when recovery artifacts are missing or corrupted.', function()
+    it('handles missing or corrupted recovery artifacts conservatively.', function()
         fn.writefile({'one'}, file)
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
@@ -250,9 +457,10 @@ describe('closed Neovim sessions.', function()
         fn.writefile({'external', 'missing-undo'}, file)
         local missingUndo = map_report(run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
             local ok, err = pcall(vim.cmd, 'undo')
             WriteReport({
-                'before=' .. BufferText(),
+                'before=' .. before,
                 'undo_ok=' .. tostring(ok),
                 'undo_err=' .. tostring(err),
                 'after=' .. BufferText(),
@@ -261,7 +469,7 @@ describe('closed Neovim sessions.', function()
         ]]).lines)
         assert.equal('external|missing-undo', missingUndo.before)
         assert.equal('true', missingUndo.undo_ok)
-        assert.equal('external|missing-undo', missingUndo.after)
+        assert.equal('one|two', missingUndo.after)
 
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
@@ -276,9 +484,10 @@ describe('closed Neovim sessions.', function()
         fn.writefile({'external', 'missing-archive'}, file)
         local missingArchive = map_report(run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
             local ok, err = pcall(vim.cmd, 'undo')
             WriteReport({
-                'before=' .. BufferText(),
+                'before=' .. before,
                 'undo_ok=' .. tostring(ok),
                 'undo_err=' .. tostring(err),
                 'after=' .. BufferText(),
@@ -288,6 +497,36 @@ describe('closed Neovim sessions.', function()
         assert.equal('external|missing-archive', missingArchive.before)
         assert.equal('true', missingArchive.undo_ok)
         assert.equal('external|missing-archive', missingArchive.after)
+
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
+            vim.cmd('write')
+            vim.cmd('quitall')
+        ]])
+        archives = fn.glob(path.join(archivesDir, '*'), false, true)
+        for _, archive in ipairs(archives) do
+            if not archive:match('%.base$') then
+                fn.delete(archive)
+            end
+        end
+        fn.writefile({'external', 'missing-fallback-with-baseline'}, file)
+        local missingFallbackWithBaseline = map_report(run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
+            local ok, err = pcall(vim.cmd, 'undo')
+            WriteReport({
+                'before=' .. before,
+                'undo_ok=' .. tostring(ok),
+                'undo_err=' .. tostring(err),
+                'after=' .. BufferText(),
+            })
+            vim.cmd('quitall!')
+        ]]).lines)
+        assert.equal('external|missing-fallback-with-baseline', missingFallbackWithBaseline.before)
+        assert.equal('true', missingFallbackWithBaseline.undo_ok)
+        assert.equal('external|missing-fallback-with-baseline', missingFallbackWithBaseline.after)
+
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
             vim.api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
@@ -306,8 +545,9 @@ describe('closed Neovim sessions.', function()
                 'edit_err=' .. tostring(edit_err),
             }
             if edit_ok then
+                local before = BufferText()
                 local ok, err = pcall(vim.cmd, 'undo')
-                table.insert(out, 'before=' .. BufferText())
+                table.insert(out, 'before=' .. before)
                 table.insert(out, 'undo_ok=' .. tostring(ok))
                 table.insert(out, 'undo_err=' .. tostring(err))
                 table.insert(out, 'after=' .. BufferText())

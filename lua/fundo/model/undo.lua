@@ -9,6 +9,7 @@ local path = require('fundo.fs.path')
 local fs = require('fundo.fs')
 local utils = require('fundo.utils')
 local log = require('fundo.lib.log')
+local config = require('fundo.config')
 
 ---@class FundoUndo
 ---@field dir string
@@ -53,6 +54,7 @@ function Undo:reset(dirty, bufName)
         self.undoPath = fn.undofile(name)
         local basename = path.basename(self.undoPath)
         self.fallbackPath = path.join(self.dir, basename)
+        self.baselinePath = self.fallbackPath .. '.base'
     end
     self.name = name
     self.isDirty = dirty and self.undoPath ~= '' and vim.bo[self.bufnr].undolevels ~= 0
@@ -98,6 +100,129 @@ function Undo:saveUndoAsync()
     end)
 end
 
+function Undo:baselineLimitBytes()
+    return config.limit_archives_size * 1024 * 1024
+end
+
+function Undo:canSaveBaseline(stat)
+    local limit = self:baselineLimitBytes()
+    if limit <= 0 or not stat then
+        return false
+    end
+    if stat.type and stat.type ~= 'file' then
+        return false
+    end
+    if type(stat.size) ~= 'number' or stat.size > limit then
+        return false
+    end
+    return true
+end
+
+function Undo:deleteBaseline()
+    if not self.baselinePath or not fs.statSync(self.baselinePath) then
+        return
+    end
+    local ok, err = pcall(fs.unlinkSync, self.baselinePath)
+    if not ok then
+        pcall(log.warn, 'failed to delete baseline archive:', self.baselinePath, err)
+    end
+end
+
+function Undo:saveBaseline()
+    if not self.baselinePath or not self.name then
+        return false
+    end
+    local stat = fs.statSync(self.name)
+    if not self:canSaveBaseline(stat) then
+        self:deleteBaseline()
+        return false
+    end
+    local ok, err = pcall(function()
+        fs.mkdirpSync(path.dirname(self.baselinePath), 493)
+        fs.copyFileSync(self.name, self.baselinePath)
+    end)
+    if not ok then
+        pcall(log.warn, 'failed to save baseline archive:', self.baselinePath, err)
+        return false
+    end
+    return true
+end
+
+function Undo:readBaseline()
+    if not self.baselinePath or not fs.statSync(self.baselinePath) then
+        return
+    end
+    local ok, lines = pcall(fn.readfile, self.baselinePath)
+    if not ok then
+        pcall(log.warn, 'failed to read baseline archive:', self.baselinePath, lines)
+        return
+    end
+    return lines
+end
+
+function Undo:linesEqual(a, b)
+    if #a ~= #b then
+        return false
+    end
+    for i = 1, #a do
+        if a[i] ~= b[i] then
+            return false
+        end
+    end
+    return true
+end
+
+function Undo:loadBaseline()
+    local baselineLines = self:readBaseline()
+    if not baselineLines then
+        return false
+    end
+    local currentLines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
+    if self:linesEqual(baselineLines, currentLines) then
+        return false
+    end
+
+    local preferredWinid = utils.getWinByBuf(self.bufnr)
+    local view
+    if utils.isWinValid(preferredWinid) then
+        view = utils.saveView(preferredWinid)
+    end
+
+    local modified = vim.bo[self.bufnr].modified
+    local ei = vim.o.eventignore
+    vim.o.eventignore = 'all'
+    local ok, err = pcall(function()
+        utils.bufCall(self.bufnr, function()
+            local undolevels = vim.bo[self.bufnr].undolevels
+            vim.bo[self.bufnr].undolevels = -1
+            local baselineOk, baselineErr =
+                pcall(api.nvim_buf_set_lines, self.bufnr, 0, -1, false, baselineLines)
+            vim.bo[self.bufnr].undolevels = undolevels
+            if not baselineOk then
+                error(baselineErr)
+            end
+            api.nvim_buf_set_lines(self.bufnr, 0, -1, false, currentLines)
+        end)
+        vim.bo[self.bufnr].modified = modified
+        if view and utils.isWinValid(preferredWinid) then
+            utils.restView(preferredWinid, view)
+        end
+    end)
+    vim.o.eventignore = ei
+    if not ok then
+        pcall(log.warn, 'failed to load baseline archive:', self.baselinePath, err)
+        pcall(api.nvim_buf_set_lines, self.bufnr, 0, -1, false, currentLines)
+        vim.bo[self.bufnr].modified = modified
+        if view and utils.isWinValid(preferredWinid) then
+            pcall(utils.restView, preferredWinid, view)
+        end
+        return false
+    end
+
+    self.isDirty = true
+    return true
+end
+
 function Undo:loadFileAndUndo(winid)
     local view
     if winid then
@@ -106,6 +231,7 @@ function Undo:loadFileAndUndo(winid)
 
     local ei = vim.o.eventignore
     vim.o.eventignore = 'all'
+    local missingUndo = false
     local ok, err = pcall(function()
         local modified = vim.bo[self.bufnr].modified
         local lines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
@@ -115,6 +241,7 @@ function Undo:loadFileAndUndo(winid)
                 keepj sil 1,%ddelete_
             ]]):format(#lines, fn.fnameescape(self.fallbackPath), #lines))
         end)
+        missingUndo = not fs.statSync(self.undoPath)
         local undoOk, undoErr = self:loadUndo()
         if not undoOk then
             api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
@@ -138,24 +265,28 @@ function Undo:loadFileAndUndo(winid)
         if winid and view and utils.isWinValid(winid) then
             pcall(utils.restView, winid, view)
         end
+        return false, missingUndo and 'missing-undo' or 'corrupt-undo'
     end
-    return ok
+    return true
 end
 
 function Undo:loadFallBack()
     if not fs.statSync(self.fallbackPath) then
-        return false
+        return false, 'missing-fallback'
     end
     local loaded = false
+    local reason
     local preferredWinid, winids = utils.getWinByBuf(self.bufnr)
     if preferredWinid == -1 then
-        loaded = self:loadFileAndUndo()
+        loaded, reason = self:loadFileAndUndo()
     elseif winids then
         for _, winid in ipairs(winids) do
-            loaded = self:loadFileAndUndo(winid) or loaded
+            local ok, err = self:loadFileAndUndo(winid)
+            loaded = ok or loaded
+            reason = ok and reason or (err or reason)
         end
     else
-        loaded = self:loadFileAndUndo(preferredWinid)
+        loaded, reason = self:loadFileAndUndo(preferredWinid)
     end
     if loaded then
         -- The buffer now contains the externally changed file with the restored
@@ -163,15 +294,21 @@ function Undo:loadFallBack()
         -- make the native undo file invalid again.
         self.isDirty = self.undoPath ~= '' and vim.bo[self.bufnr].undolevels ~= 0
     end
-    return loaded
+    return loaded, reason
 end
 
 function Undo:shouldTransfer()
     if not self.attached or self.undoPath == '' then
         return false
     end
-    if self.isDirty or not fs.statSync(self.undoPath) then
+    if self.isDirty then
         return true
+    end
+    if not fs.statSync(self.undoPath) then
+        if type(vim.in_fast_event) == 'function' and vim.in_fast_event() then
+            return true
+        end
+        return not self:isEmpty()
     end
     if fs.statSync(self.fallbackPath) then
         return false
@@ -201,6 +338,7 @@ function Undo:transfer()
         end
         fs.mkdirpSync(path.dirname(self.fallbackPath), 493)
         await(fs.copyFile(self.name, self.fallbackPath))
+        self:saveBaseline()
         self.isDirty = false
     end)
 end
@@ -220,6 +358,7 @@ function Undo:transferSync()
     end
     fs.mkdirpSync(path.dirname(self.fallbackPath), 493)
     fs.copyFileSync(self.name, self.fallbackPath)
+    self:saveBaseline()
     self.isDirty = false
 end
 
@@ -227,9 +366,20 @@ function Undo:check()
     if not self.attached or self.undoPath == '' then
         return
     end
-    if self:isEmpty() then
-        self:loadFallBack()
+    if not self:isEmpty() then
+        return
     end
+    local loaded, reason = self:loadFallBack()
+    if loaded then
+        return
+    end
+    if reason == 'missing-fallback' and fs.statSync(self.undoPath) then
+        return
+    end
+    if self:loadBaseline() then
+        return
+    end
+    self:saveBaseline()
 end
 
 return Undo

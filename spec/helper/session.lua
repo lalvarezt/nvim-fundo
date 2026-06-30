@@ -37,7 +37,7 @@ function M.run(opts)
         'vim.o.undodir = ' .. quote(opts.undo_dir),
         'require("fundo").setup({',
         '    archives_dir = ' .. quote(opts.archives_dir) .. ',',
-        '    limit_archives_size = 16,',
+        '    limit_archives_size = ' .. tostring(opts.limit_archives_size or 16) .. ',',
         '})',
         'FILE = ' .. quote(opts.file),
         'REPORT = ' .. quote(report),
