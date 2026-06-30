@@ -198,6 +198,7 @@ function Undo:transfer()
         if not stat then
             error('failed to stat buffer file: ' .. self.name)
         end
+        fs.mkdirpSync(path.dirname(self.fallbackPath), 493)
         await(fs.copyFile(self.name, self.fallbackPath))
         self.isDirty = false
     end)
@@ -216,6 +217,7 @@ function Undo:transferSync()
     if not stat then
         error('failed to stat buffer file: ' .. self.name)
     end
+    fs.mkdirpSync(path.dirname(self.fallbackPath), 493)
     fs.copyFileSync(self.name, self.fallbackPath)
     self.isDirty = false
 end

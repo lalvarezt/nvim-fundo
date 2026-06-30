@@ -5,12 +5,14 @@ local async = require('async')
 local promise = require('promise')
 local manager = require('fundo.manager')
 local path = require('fundo.fs.path')
+local event = require('fundo.lib.event')
 
 describe('fundo integration.', function()
     local tmpdir
     local archivesDir
     local undoDir
     local file
+    local sync_all
 
     local function buffer_lines()
         return api.nvim_buf_get_lines(0, 0, -1, false)
@@ -26,16 +28,38 @@ describe('fundo integration.', function()
         end
     end
 
-    local function assert_history_restores_to(expected)
+    local function assert_history_restores_to(expected, redo_expected)
+        redo_expected = redo_expected or {'external', 'change'}
         local undolist = api.nvim_exec('undolist', true)
         assert.truthy(undolist:match('^number'), 'expected undo history to be available')
         vim.cmd('undo')
         assert.same(expected, buffer_lines())
         vim.cmd('redo')
-        assert.same({'external', 'change'}, buffer_lines())
+        assert.same(redo_expected, buffer_lines())
     end
 
-    local function sync_all()
+    local function edit_and_write(lines)
+        api.nvim_buf_set_lines(0, 0, -1, false, lines)
+        vim.cmd('write')
+    end
+
+    local function open_file_with_history(initial, internal)
+        fn.writefile(initial, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        edit_and_write(internal)
+        sync_all()
+        assert.are_not.equal(0, #archives())
+    end
+
+    local function external_write(lines)
+        fn.writefile(lines, file)
+    end
+
+    local function external_append(lines)
+        fn.writefile(lines, file, 'a')
+    end
+
+    sync_all = function()
         local finished = false
         local ok = true
         local err
@@ -171,6 +195,150 @@ describe('fundo integration.', function()
         assert.same({'external', 'change'}, buffer_lines())
 
         assert_history_restores_to({'one', 'two'})
+    end)
+
+    it('keeps a dirty loaded buffer unchanged when checktime sees an external overwrite.', function()
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
+
+        fn.writefile({'external', 'change'}, file)
+        local ok, err = pcall(vim.cmd, 'checktime')
+
+        assert.True(ok, err)
+        assert.same({'one', 'two'}, buffer_lines())
+        assert.True(vim.bo.modified)
+    end)
+
+    it('restores undo history after loaded buffer external append.', function()
+        open_file_with_history({'one'}, {'one', 'two'})
+
+        external_append({'external'})
+        vim.cmd('checktime')
+
+        assert.same({'one', 'two', 'external'}, buffer_lines())
+        assert_history_restores_to({'one', 'two'}, {'one', 'two', 'external'})
+    end)
+
+    it('restores undo history after loaded buffer external truncate.', function()
+        open_file_with_history({'one', 'two'}, {'one', 'two', 'three'})
+
+        external_write({'one'})
+        vim.cmd('checktime')
+
+        assert.same({'one'}, buffer_lines())
+        assert_history_restores_to({'one', 'two', 'three'}, {'one'})
+    end)
+
+    it('restores undo history after multiple external edits before one checktime.', function()
+        open_file_with_history({'one'}, {'one', 'two'})
+
+        external_write({'external', 'version-a'})
+        external_write({'external', 'version-b'})
+        vim.cmd('checktime')
+
+        assert.same({'external', 'version-b'}, buffer_lines())
+        assert_history_restores_to({'one', 'two'}, {'external', 'version-b'})
+    end)
+
+    it('restores undo history after explicit bunload and external file changes.', function()
+        local other = path.join(tmpdir, 'other.txt')
+
+        fn.writefile({'one'}, file)
+        fn.writefile({'placeholder'}, other)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        edit_and_write({'one', 'two'})
+        vim.cmd('edit ' .. fn.fnameescape(other))
+        vim.cmd('buffer ' .. fn.fnameescape(file))
+        vim.cmd('bunload')
+
+        assert.are_not.equal(0, #archives())
+
+        external_write({'external', 'change'})
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        assert.same({'external', 'change'}, buffer_lines())
+
+        assert_history_restores_to({'one', 'two'})
+    end)
+
+    it('restores undo history after bdelete and external file changes.', function()
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        edit_and_write({'one', 'two'})
+        vim.cmd('bdelete')
+
+        assert.are_not.equal(0, #archives())
+
+        external_write({'external', 'change'})
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        assert.same({'external', 'change'}, buffer_lines())
+
+        assert_history_restores_to({'one', 'two'})
+    end)
+
+    it('tracks the saveas path for later external changes.', function()
+        local saved_as = path.join(tmpdir, 'saved-as.txt')
+
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        edit_and_write({'one', 'two'})
+        vim.cmd('saveas ' .. fn.fnameescape(saved_as))
+        file = saved_as
+        sync_all()
+
+        external_write({'external', 'change'})
+        vim.cmd('checktime')
+
+        assert.same({'external', 'change'}, buffer_lines())
+        assert_history_restores_to({'one', 'two'})
+    end)
+
+    it('syncs dirty undo state on FocusLost before an external change.', function()
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        edit_and_write({'one', 'two'})
+        clear_archives()
+
+        event:emit('FocusLost')
+
+        assert.True(vim.wait(1000, function()
+            return #archives() > 0
+        end, 20, false))
+        external_write({'external', 'change'})
+        vim.cmd('checktime')
+
+        assert.same({'external', 'change'}, buffer_lines())
+        assert_history_restores_to({'one', 'two'})
+    end)
+
+    it('syncs dirty undo state on TermEnter.', function()
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        edit_and_write({'one', 'two'})
+        clear_archives()
+
+        event:emit('TermEnter')
+
+        local u = manager:get(api.nvim_get_current_buf())
+        assert.truthy(u)
+        assert.True(vim.wait(1000, function()
+            return #archives() > 0 and not u.isDirty
+        end, 20, false))
+        assert.False(u.isDirty)
+    end)
+
+    it('does not sync on non-colon CmdlineEnter events.', function()
+        local syncAll = manager.syncAll
+        local calls = 0
+
+        manager.syncAll = function(self, ...)
+            calls = calls + 1
+            return syncAll(self, ...)
+        end
+        event:emit('CmdlineEnter', '/')
+        manager.syncAll = syncAll
+
+        assert.equal(0, calls)
     end)
 
     it('tracks buffers that were loaded before setup.', function()
@@ -428,6 +596,16 @@ describe('fundo integration.', function()
         local u = manager:get(bufnr)
         assert.truthy(u, 'expected failed detach to leave the undo object available for retry')
         assert.True(u.isDirty)
+
+        ok, err = manager:detach(bufnr)
+
+        assert.True(ok, err)
+        assert.falsy(manager:get(bufnr))
+        vim.cmd('bwipeout!')
+        fn.writefile({'external', 'change'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        assert.same({'external', 'change'}, buffer_lines())
+        assert_history_restores_to({'one', 'two'})
     end)
 
     it('does not update the fallback archive when saving native undo fails.', function()
@@ -539,5 +717,24 @@ describe('fundo integration.', function()
         assert.False(ok)
         assert.truthy(tostring(err):match('forced async archive copy failure'))
         assert.True(u.isDirty)
+    end)
+
+    it('recreates a deleted archive directory before syncing.', function()
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        local bufnr = api.nvim_get_current_buf()
+        api.nvim_buf_set_lines(bufnr, 0, -1, false, {'one', 'two'})
+        vim.cmd('write')
+
+        fn.delete(archivesDir, 'rf')
+        sync_all()
+
+        assert.equal(1, fn.isdirectory(archivesDir))
+        assert.are_not.equal(0, #archives())
+
+        fn.writefile({'external', 'change'}, file)
+        vim.cmd('checktime')
+        assert.same({'external', 'change'}, buffer_lines())
+        assert_history_restores_to({'one', 'two'})
     end)
 end)

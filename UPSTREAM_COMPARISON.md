@@ -217,58 +217,84 @@ Why it exists:
 
 ## Test coverage added for these changes
 
+### External-change coverage matrix
+
+| Area                                     | Status                             | Evidence / decision                                                                                                                                                                                                                                     |
+|------------------------------------------|------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Open loaded clean buffer                 | covered, strengthened in this pass | `spec/fundo_spec.lua` covers overwrite, append, truncate, and multiple external writes before one `:checktime`; undo returns to the last internal state.                                                                                                |
+| Open dirty loaded buffer                 | added in this pass                 | `:checktime` leaves a modified buffer unchanged after an external overwrite. Fundo does not report a repair because Neovim does not reload the dirty buffer in this path.                                                                               |
+| Open unloaded buffer                     | added in this pass                 | Explicit `:bunload` now has coverage separate from `bufhidden=unload`; undo survives an external edit before reopen.                                                                                                                                    |
+| Open deleted/wiped buffer                | covered, strengthened in this pass | Existing wipeout coverage remains; explicit `:bdelete` coverage was added for the common user command path.                                                                                                                                             |
+| Open lifecycle sync                      | partially added in this pass       | `FocusLost` and `TermEnter` are proven to schedule useful sync work. Non-`: CmdlineEnter` remains guarded. A deterministic headless `CmdlineEnter` external-command race was not found, so `CmdlineEnter` remains unresolved rather than proven useful. |
+| Open save-as / path boundary             | added in this pass                 | `:saveas` coverage verifies the current buffer path is tracked and later external edits to the new path preserve undo.                                                                                                                                  |
+| Closed linear history                    | covered, strengthened in this pass | `spec/session_spec.lua` covers overwrite, append, truncate, empty overwrite, and multiple external overwrites while Neovim is closed.                                                                                                                   |
+| Closed branch history                    | covered, strengthened in this pass | Existing branch overwrite coverage remains; external append was added and verifies undo/redo branch shape.                                                                                                                                              |
+| Closed multi-external                    | added in this pass                 | Multiple external overwrites while closed reopen to the final version and undo to the prior internal state.                                                                                                                                             |
+| Missing native undo                      | covered, clarified in this pass    | With native undo missing, fallback-only recovery fails safely: no error and no false restored history claim.                                                                                                                                            |
+| Missing fallback archive                 | covered, clarified in this pass    | If the file is unchanged, `shouldTransfer()` recreates the fallback archive from native undo. After an external edit with the fallback missing, recovery fails safely because the native undo is no longer enough to repair.                            |
+| Corrupted/stale fallback archive         | added in this pass                 | A stale fallback archive is not accepted as a successful repair to unrelated stale content. Corrupted native undo still fails visibly.                                                                                                                  |
+| Archive directory deleted while open     | added and fixed in this pass       | Transfer now recreates the archive parent directory before copying fallback content, using libuv-safe directory creation for fast-event paths.                                                                                                          |
+| Binary or invalid UTF-8 external content | deferred                           | Neovim text buffer semantics do not reliably preserve arbitrary bytes such as NUL; this needs a separate byte-oriented feasibility pass.                                                                                                                |
+
 Important new coverage:
 
 - Repeated setup reloads config.
 - Event emit continues after listener failure or self-disposal.
 - Archive copy cleans temporary files on rename failure.
 - Archive directory creation handles nested missing parents.
+- Archive directory recreation after deletion while Neovim is open.
 - Undo preservation after:
   - wipeout
   - unload
+  - explicit `:bunload`
+  - explicit `:bdelete`
   - loaded-buffer external edits
+  - loaded-buffer external append, truncate, and multiple pending external edits
+  - closed-session external append, truncate, empty overwrite, and multiple overwrites
   - missing native undo file
   - missing fallback archive
   - closed Neovim followed by external edits
-  - branched undo trees across separate Neovim processes
+  - branched undo trees across separate Neovim processes, including external append
 - Failure semantics for:
   - failed native undo save
   - failed archive copy
+  - retry after failed detach transfer
   - failed fallback undo load
   - failed async sync
   - corrupted native undo file
+  - stale fallback archive content
 - Path normalization edge cases on Unix and Windows-style paths.
 
 Current verification:
 
 - `make test`
-- `76 successes / 0 failures / 0 errors / 0 pending`
+- `98 successes / 0 failures / 0 errors / 0 pending`
 
 ## File-by-file reason map
 
-| File | Reason to keep |
-| --- | --- |
-| `LICENSE.promise-async` | Required license for vendored runtime. |
-| `Makefile` | Stops installing external `promise-async`; improves Lua version target selection. |
-| `README.md` | Documents vendored dependency; no longer advertises the no-op install hook. |
-| `lua/async.lua` | Vendored async entrypoint. |
-| `lua/promise.lua` | Vendored promise runtime. |
-| `lua/promise-async/*` | Vendored compatibility/runtime support. |
-| `lua/fundo.lua` | Reloads config and restarts plugin on repeated setup. |
-| `lua/fundo/config.lua` | Mutates module config table on reload. |
-| `lua/fundo/main.lua` | Adds unload and file-change events to the preservation lifecycle. |
-| `lua/fundo/manager.lua` | Attaches loaded buffers, persists on detach, reports transfer failures, prunes archives robustly. |
+| File                       | Reason to keep                                                                                     |
+|----------------------------|----------------------------------------------------------------------------------------------------|
+| `LICENSE.promise-async`    | Required license for vendored runtime.                                                             |
+| `Makefile`                 | Stops installing external `promise-async`; improves Lua version target selection.                  |
+| `README.md`                | Documents vendored dependency; no longer advertises the no-op install hook.                        |
+| `lua/async.lua`            | Vendored async entrypoint.                                                                         |
+| `lua/promise.lua`          | Vendored promise runtime.                                                                          |
+| `lua/promise-async/*`      | Vendored compatibility/runtime support.                                                            |
+| `lua/fundo.lua`            | Reloads config and restarts plugin on repeated setup.                                              |
+| `lua/fundo/config.lua`     | Mutates module config table on reload.                                                             |
+| `lua/fundo/main.lua`       | Adds unload and file-change events to the preservation lifecycle.                                  |
+| `lua/fundo/manager.lua`    | Attaches loaded buffers, persists on detach, reports transfer failures, prunes archives robustly.  |
 | `lua/fundo/model/undo.lua` | Implements fallback archive repair, atomic transfer, sync transfer, and failure-correct semantics. |
-| `lua/fundo/fs/init.lua` | Adds atomic copy helpers, sync copy, and mkdirp support needed by persistence. |
-| `lua/fundo/fs/path.lua` | Normalizes archive paths predictably across edge cases. |
-| `lua/fundo/lib/event.lua` | Makes event iteration robust; conditional keep due to swallowed errors. |
-| `spec/config_spec.lua` | Covers repeated setup behavior. |
-| `spec/event_spec.lua` | Covers robust event emission. |
-| `spec/fs_spec.lua` | Covers fs helper hardening. |
-| `spec/fundo_spec.lua` | Covers core undo preservation and failure semantics in-process. |
-| `spec/helper/session.lua` | Provides real subprocess Neovim lifecycle tests. |
-| `spec/path_spec.lua` | Covers path behavior added by the fork. |
-| `spec/session_spec.lua` | Covers closed-Neovim external-edit preservation. |
+| `lua/fundo/fs/init.lua`    | Adds atomic copy helpers, sync copy, and mkdirp support needed by persistence.                     |
+| `lua/fundo/fs/path.lua`    | Normalizes archive paths predictably across edge cases.                                            |
+| `lua/fundo/lib/event.lua`  | Makes event iteration robust; conditional keep due to swallowed errors.                            |
+| `spec/config_spec.lua`     | Covers repeated setup behavior.                                                                    |
+| `spec/event_spec.lua`      | Covers robust event emission.                                                                      |
+| `spec/fs_spec.lua`         | Covers fs helper hardening.                                                                        |
+| `spec/fundo_spec.lua`      | Covers core undo preservation and failure semantics in-process.                                    |
+| `spec/helper/session.lua`  | Provides real subprocess Neovim lifecycle tests.                                                   |
+| `spec/path_spec.lua`       | Covers path behavior added by the fork.                                                            |
+| `spec/session_spec.lua`    | Covers closed-Neovim external-edit preservation.                                                   |
 
 ## Bottom line
 
@@ -289,10 +315,10 @@ Verification after this audit:
 - `make test BUSTED_ARGS=spec/config_spec.lua`: 1 success / 0 failures / 0 errors.
 - `make test BUSTED_ARGS=spec/event_spec.lua`: 3 successes / 0 failures / 0 errors.
 - `make test BUSTED_ARGS=spec/fs_spec.lua`: 12 successes / 0 failures / 0 errors.
-- `make test BUSTED_ARGS=spec/fundo_spec.lua`: 28 successes / 0 failures / 0 errors.
+- `make test BUSTED_ARGS=spec/fundo_spec.lua`: 39 successes / 0 failures / 0 errors.
 - `make test BUSTED_ARGS=spec/path_spec.lua`: 26 successes / 0 failures / 0 errors.
-- `make test BUSTED_ARGS=spec/session_spec.lua`: 4 successes / 0 failures / 0 errors.
-- `make test`: 80 successes / 0 failures / 0 errors.
+- `make test BUSTED_ARGS=spec/session_spec.lua`: 11 successes / 0 failures / 0 errors.
+- `make test`: 98 successes / 0 failures / 0 errors.
 
 Changes made:
 
@@ -307,6 +333,12 @@ transfer state.
 - Fixed `Undo:shouldTransfer()` so missing-fallback checks do not call non-fast Neovim APIs from fast-event async paths.
 - Fixed setup failure handling so a bad archive path does not leave the manager initialized or leak event handlers from
 a partial enable.
+- Added external-change matrix coverage for open loaded append/truncate/multiple edits, dirty loaded `:checktime`,
+explicit `:bunload`, explicit `:bdelete`, `:saveas`, lifecycle sync, closed-session append/truncate/empty/multiple
+external edits, branch append, stale fallback archives, and archive-directory deletion.
+- Fixed fallback transfer so a deleted archive directory is recreated before copy.
+- Reworked `fs.mkdirpSync()` to use libuv calls instead of `vim.fn.mkdir()`, because async transfer can run from
+fast-event paths where Vimscript functions are rejected.
 
 Decisions:
 
@@ -321,12 +353,22 @@ preserves undo after an external edit.
 tests cover these preservation paths.
 - Keep: `FileChangedShellPost`. The loaded-buffer external-change test covers `:checktime` restoring file content and
 undo history.
+- Keep: `FocusLost` and `TermEnter` sync hooks. New tests prove they can persist dirty undo state before a later
+external edit.
 - Keep/Fix: archive transfer and fallback repair semantics. The audit found that failed detach transfer used to drop the
 undo object; it now stays tracked and dirty for retry.
+- Keep/Fix: failed detach retry. New coverage proves a failed fallback copy leaves the undo object tracked and a later
+successful detach produces an archive that can restore undo after an external edit.
 - Keep/Fix: event listener isolation. Listener failures remain isolated, and tests now prove they are observable via
 logging.
-- Experiment needed: `CmdlineEnter` sync. No new evidence was added in this pass; keep it pending a scenario or
-performance check.
+- Experiment still needed: `CmdlineEnter` sync. Non-colon command-line entry is covered by a guard test. A deterministic
+headless shell-command mutation did not provide reliable proof for colon `CmdlineEnter`, so it remains unresolved rather
+than proven useful.
+- Clarified: a missing native undo file or missing fallback archive after an external edit fails safely but cannot
+restore history. Missing fallback archives are recreated when the file has not changed and native undo can still be
+loaded.
+- Deferred: binary-ish external content with NUL or invalid UTF-8 remains out of scope for this pass because Neovim text
+buffers do not provide byte-preserving semantics for arbitrary file content.
 - Keep current path exports. `basename`, `dirname`, `normalize`, and `join` all have production callers, so the scope
 risk is future expansion rather than currently unused code.
 

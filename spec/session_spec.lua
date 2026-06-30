@@ -42,7 +42,7 @@ describe('closed Neovim sessions.', function()
         })
     end
 
-    it('preserves linear undo history after an external edit while closed.', function()
+    local function create_linear_history()
         fn.writefile({'one'}, file)
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
@@ -52,8 +52,9 @@ describe('closed Neovim sessions.', function()
             vim.cmd('write')
             vim.cmd('quitall')
         ]])
+    end
 
-        fn.writefile({'external', 'change'}, file)
+    local function assert_linear_recovery(expected_before)
         local report = map_report(run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
             local out = {'before=' .. BufferText(), 'entries_before=' .. tostring(EntryCount())}
@@ -73,16 +74,57 @@ describe('closed Neovim sessions.', function()
             vim.cmd('quitall!')
         ]]).lines)
 
-        assert.equal('external|change', report.before)
+        assert.equal(expected_before, report.before)
         assert.equal('true', report.undo1_ok)
         assert.equal('one|two|three', report.undo1)
         assert.equal('true', report.undo2_ok)
         assert.equal('one|two', report.undo2)
         assert.equal('true', report.redo_ok)
         assert.equal('one|two|three', report.redo)
+        return report
+    end
+
+    it('preserves linear undo history after an external edit while closed.', function()
+        create_linear_history()
+
+        fn.writefile({'external', 'change'}, file)
+        assert_linear_recovery('external|change')
     end)
 
-    it('preserves a branched undo tree after an external edit while closed.', function()
+    it('preserves linear undo history after an external append while closed.', function()
+        create_linear_history()
+
+        fn.writefile({'external'}, file, 'a')
+
+        assert_linear_recovery('one|two|three|external')
+    end)
+
+    it('preserves linear undo history after an external truncate while closed.', function()
+        create_linear_history()
+
+        fn.writefile({'one'}, file)
+
+        assert_linear_recovery('one')
+    end)
+
+    it('handles an empty-file external overwrite while closed.', function()
+        create_linear_history()
+
+        fn.writefile({}, file)
+
+        assert_linear_recovery('')
+    end)
+
+    it('preserves linear undo history after multiple external overwrites while closed.', function()
+        create_linear_history()
+
+        fn.writefile({'external', 'version-a'}, file)
+        fn.writefile({'external', 'version-b'}, file)
+
+        assert_linear_recovery('external|version-b')
+    end)
+
+    local function create_branched_history()
         fn.writefile({'base'}, file)
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
@@ -95,8 +137,9 @@ describe('closed Neovim sessions.', function()
             vim.cmd('write')
             vim.cmd('quitall')
         ]])
+    end
 
-        fn.writefile({'external', 'change'}, file)
+    local function assert_branch_recovery(expected_before)
         local report = map_report(run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
             local out = {'before=' .. BufferText(), 'entries_before=' .. tostring(EntryCount())}
@@ -117,7 +160,7 @@ describe('closed Neovim sessions.', function()
             vim.cmd('quitall!')
         ]]).lines)
 
-        assert.equal('external|change', report.before)
+        assert.equal(expected_before, report.before)
         assert.is_true(tonumber(report.entries_before) >= 3)
         assert.equal('true', report.undo1_ok)
         assert.equal('base|branch1', report.undo1)
@@ -126,6 +169,21 @@ describe('closed Neovim sessions.', function()
         assert.equal('true', report.redo_ok)
         assert.equal('base|branch1', report.redo)
         assert.is_true(tonumber(report.entries_after) >= 3)
+    end
+
+    it('preserves a branched undo tree after an external edit while closed.', function()
+        create_branched_history()
+
+        fn.writefile({'external', 'change'}, file)
+        assert_branch_recovery('external|change')
+    end)
+
+    it('preserves a branched undo tree after an external append while closed.', function()
+        create_branched_history()
+
+        fn.writefile({'external'}, file, 'a')
+
+        assert_branch_recovery('base|branch1|external')
     end)
 
     it('preserves history across outside, inside, outside edits in separate sessions.', function()
@@ -153,11 +211,16 @@ describe('closed Neovim sessions.', function()
         fn.writefile({'external', 'change'}, file)
         local report = map_report(run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
-            local out = {'before=' .. BufferText()}
+            local out = {'before=' .. BufferText(), 'entries_before=' .. tostring(EntryCount())}
             local ok, err = pcall(vim.cmd, 'undo')
             table.insert(out, 'undo_ok=' .. tostring(ok))
             table.insert(out, 'undo_err=' .. tostring(err))
             table.insert(out, 'undo=' .. BufferText())
+            local redo_ok, redo_err = pcall(vim.cmd, 'redo')
+            table.insert(out, 'redo_ok=' .. tostring(redo_ok))
+            table.insert(out, 'redo_err=' .. tostring(redo_err))
+            table.insert(out, 'redo=' .. BufferText())
+            table.insert(out, 'entries_after=' .. tostring(EntryCount()))
             WriteReport(out)
             vim.cmd('quitall!')
         ]]).lines)
@@ -165,6 +228,10 @@ describe('closed Neovim sessions.', function()
         assert.equal('external|change', report.before)
         assert.equal('true', report.undo_ok)
         assert.equal('external|one|inside', report.undo)
+        assert.equal('true', report.redo_ok)
+        assert.equal('external|change', report.redo)
+        assert.is_true(tonumber(report.entries_before) >= 2)
+        assert.is_true(tonumber(report.entries_after) >= 2)
     end)
 
     it('fails safely when recovery artifacts are missing or corrupted.', function()
@@ -194,6 +261,7 @@ describe('closed Neovim sessions.', function()
         ]]).lines)
         assert.equal('external|missing-undo', missingUndo.before)
         assert.equal('true', missingUndo.undo_ok)
+        assert.equal('external|missing-undo', missingUndo.after)
 
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
@@ -219,7 +287,7 @@ describe('closed Neovim sessions.', function()
         ]]).lines)
         assert.equal('external|missing-archive', missingArchive.before)
         assert.equal('true', missingArchive.undo_ok)
-
+        assert.equal('external|missing-archive', missingArchive.after)
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
             vim.api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
@@ -249,5 +317,60 @@ describe('closed Neovim sessions.', function()
         ]]).lines)
         assert.equal('false', corruptUndo.edit_ok)
         assert.truthy(corruptUndo.edit_err:match('E823'))
+    end)
+
+    it('recreates a missing fallback archive from native undo when the file is unchanged.', function()
+        fn.writefile({'one'}, file)
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
+            vim.cmd('write')
+            vim.cmd('quitall')
+        ]])
+
+        local archives = fn.glob(path.join(archivesDir, '*'), false, true)
+        assert.are_not.equal(0, #archives)
+        for _, archive in ipairs(archives) do
+            fn.delete(archive)
+        end
+
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('quitall')
+        ]])
+
+        assert.are_not.equal(0, #fn.glob(path.join(archivesDir, '*'), false, true))
+    end)
+
+    it('does not replay a stale fallback archive as a successful repair.', function()
+        fn.writefile({'one'}, file)
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
+            vim.cmd('write')
+            vim.cmd('quitall')
+        ]])
+
+        local archives = fn.glob(path.join(archivesDir, '*'), false, true)
+        assert.are_not.equal(0, #archives)
+        for _, archive in ipairs(archives) do
+            fn.writefile({'stale', 'archive'}, archive)
+        end
+
+        fn.writefile({'external', 'change'}, file)
+        local report = map_report(run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local ok, err = pcall(vim.cmd, 'undo')
+            WriteReport({
+                'before=' .. BufferText(),
+                'undo_ok=' .. tostring(ok),
+                'undo_err=' .. tostring(err),
+                'after=' .. BufferText(),
+            })
+            vim.cmd('quitall!')
+        ]]).lines)
+
+        assert.equal('external|change', report.before)
+        assert.are_not.equal('stale|archive', report.after)
     end)
 end)
