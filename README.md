@@ -112,6 +112,16 @@ The upstream BSD-3-Clause license is included in [LICENSE.promise-async](./LICEN
         description = [[Limit the archives directory size, unit is MB(megabyte), elder files will be
         removed based on their modified time]],
         default = 512
+    },
+    logging = {
+        description = [[Logging configuration. Disabled by default. When enabled, Fundo writes
+        lifecycle, sync, archive, baseline, and failure events to logging.path. FUNDO_LOG can
+        also be set to a level name to enable logging without config.]],
+        default = {
+            enabled = false,
+            level = 'warn',
+            path = vim.fn.stdpath('cache') .. path.separator .. 'fundo.log'
+        }
     }
 }
 ```

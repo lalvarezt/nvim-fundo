@@ -17,6 +17,11 @@ local config = require('fundo.config')
 ---@field attached boolean
 local Undo = {}
 
+local function logTransferDecision(self, result, reason)
+    log.trace('shouldTransfer:', result, reason, 'bufnr:', self.bufnr, 'file:', self.name or '')
+    return result
+end
+
 function Undo:new(bufnr, dir)
     local o = setmetatable({}, self)
     self.__index = self
@@ -29,16 +34,23 @@ function Undo:attach()
     local bt = vim.bo[self.bufnr].bt
     local name = api.nvim_buf_get_name(self.bufnr)
     if path.dirname(name) == self.dir then
+        log.debug('attach disabled undofile for archive buffer:', self.bufnr, name)
         vim.bo[self.bufnr].undofile = false
     end
     self.attached = (bt == '' or bt == 'acwrite') and vim.bo[self.bufnr].undofile
     if self.attached then
         self:reset()
+        log.debug('undo attached:', self.bufnr, name)
+    elseif bt ~= '' and bt ~= 'acwrite' then
+        log.debug('undo attach skipped; unsupported buftype:', self.bufnr, name, bt)
+    elseif not vim.bo[self.bufnr].undofile then
+        log.debug('undo attach skipped; undofile disabled:', self.bufnr, name)
     end
     return self.attached
 end
 
 function Undo:dispose()
+    log.debug('undo disposed:', self.bufnr, self.name or '')
     self.attached = false
 end
 
@@ -47,6 +59,7 @@ end
 ---@param bufName? string
 function Undo:reset(dirty, bufName)
     if not self.attached then
+        log.trace('reset skipped; undo is not attached:', self.bufnr)
         return
     end
     local name = bufName or api.nvim_buf_get_name(self.bufnr)
@@ -55,9 +68,12 @@ function Undo:reset(dirty, bufName)
         local basename = path.basename(self.undoPath)
         self.fallbackPath = path.join(self.dir, basename)
         self.baselinePath = self.fallbackPath .. '.base'
+        log.debug('undo paths reset:', 'bufnr:', self.bufnr, 'file:', name, 'undo:', self.undoPath,
+            'fallback:', self.fallbackPath, 'baseline:', self.baselinePath)
     end
     self.name = name
     self.isDirty = dirty and self.undoPath ~= '' and vim.bo[self.bufnr].undolevels ~= 0
+    log.debug('undo dirty state:', self.bufnr, self.name, self.isDirty == true)
 end
 
 function Undo:isEmpty()
@@ -68,20 +84,33 @@ function Undo:isEmpty()
 end
 
 function Undo:loadUndo()
-    return utils.bufCall(self.bufnr, function()
+    local ok, err = utils.bufCall(self.bufnr, function()
         return pcall(cmd, 'sil rundo ' .. fn.fnameescape(self.undoPath))
     end)
+    if ok then
+        log.debug('loaded undo file:', self.undoPath)
+    else
+        log.debug('failed to load undo file:', self.undoPath, err)
+    end
+    return ok, err
 end
 
 function Undo:saveUndo()
     if self.undoPath == '' then
+        log.debug('saveUndo skipped; empty undo path:', self.bufnr, self.name or '')
         return false
     end
     local ok, cmdOk, cmdErr = pcall(utils.bufCall, self.bufnr, function()
         return pcall(cmd, 'sil wundo! ' .. fn.fnameescape(self.undoPath))
     end)
     if not ok then
+        log.debug('saveUndo failed:', self.undoPath, cmdOk)
         return false, cmdOk
+    end
+    if cmdOk then
+        log.debug('saved undo file:', self.undoPath)
+    else
+        log.debug('saveUndo failed:', self.undoPath, cmdErr)
     end
     return cmdOk, cmdErr
 end
@@ -107,12 +136,15 @@ end
 function Undo:canSaveBaseline(stat)
     local limit = self:baselineLimitBytes()
     if limit <= 0 or not stat then
+        log.trace('baseline save skipped; missing stat or non-positive limit:', self.baselinePath, limit)
         return false
     end
     if stat.type and stat.type ~= 'file' then
+        log.trace('baseline save skipped; source is not a file:', self.name, stat.type)
         return false
     end
     if type(stat.size) ~= 'number' or stat.size > limit then
+        log.debug('baseline save skipped; source exceeds limit:', self.name, 'size:', stat.size, 'limit:', limit)
         return false
     end
     return true
@@ -125,11 +157,14 @@ function Undo:deleteBaseline()
     local ok, err = pcall(fs.unlinkSync, self.baselinePath)
     if not ok then
         pcall(log.warn, 'failed to delete baseline archive:', self.baselinePath, err)
+    else
+        log.debug('deleted baseline archive:', self.baselinePath)
     end
 end
 
 function Undo:saveBaseline()
     if not self.baselinePath or not self.name then
+        log.debug('saveBaseline skipped; missing paths:', self.bufnr, self.name or '', self.baselinePath or '')
         return false
     end
     local stat = fs.statSync(self.name)
@@ -145,11 +180,13 @@ function Undo:saveBaseline()
         pcall(log.warn, 'failed to save baseline archive:', self.baselinePath, err)
         return false
     end
+    log.debug('saved baseline archive:', self.baselinePath)
     return true
 end
 
 function Undo:readBaseline()
     if not self.baselinePath or not fs.statSync(self.baselinePath) then
+        log.debug('readBaseline skipped; baseline missing:', self.baselinePath or '')
         return
     end
     local ok, lines = pcall(fn.readfile, self.baselinePath)
@@ -157,6 +194,7 @@ function Undo:readBaseline()
         pcall(log.warn, 'failed to read baseline archive:', self.baselinePath, lines)
         return
     end
+    log.debug('read baseline archive:', self.baselinePath, 'lines:', #lines)
     return lines
 end
 
@@ -175,10 +213,12 @@ end
 function Undo:loadBaseline()
     local baselineLines = self:readBaseline()
     if not baselineLines then
+        log.debug('loadBaseline skipped; no baseline:', self.baselinePath or '')
         return false
     end
     local currentLines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
     if self:linesEqual(baselineLines, currentLines) then
+        log.debug('loadBaseline skipped; baseline equals current buffer:', self.baselinePath)
         return false
     end
 
@@ -220,10 +260,12 @@ function Undo:loadBaseline()
     end
 
     self.isDirty = true
+    log.debug('loaded baseline archive:', self.baselinePath)
     return true
 end
 
 function Undo:loadFileAndUndo(winid)
+    log.debug('loading fallback and undo:', 'fallback:', self.fallbackPath, 'undo:', self.undoPath, 'winid:', winid)
     local view
     if winid then
         view = utils.saveView(winid)
@@ -267,11 +309,13 @@ function Undo:loadFileAndUndo(winid)
         end
         return false, missingUndo and 'missing-undo' or 'corrupt-undo'
     end
+    log.debug('loaded fallback and undo:', 'fallback:', self.fallbackPath, 'undo:', self.undoPath)
     return true
 end
 
 function Undo:loadFallBack()
     if not fs.statSync(self.fallbackPath) then
+        log.debug('loadFallBack skipped; fallback missing:', self.fallbackPath)
         return false, 'missing-fallback'
     end
     local loaded = false
@@ -293,40 +337,45 @@ function Undo:loadFallBack()
         -- undo tree. Persist that repaired pair before another external edit can
         -- make the native undo file invalid again.
         self.isDirty = self.undoPath ~= '' and vim.bo[self.bufnr].undolevels ~= 0
+        log.debug('loaded fallback archive:', self.fallbackPath, 'reason:', reason or '')
+    else
+        log.debug('failed to load fallback archive:', self.fallbackPath, 'reason:', reason or '')
     end
     return loaded, reason
 end
 
 function Undo:shouldTransfer()
     if not self.attached or self.undoPath == '' then
-        return false
+        return logTransferDecision(self, false, self.attached and 'empty-undo-path' or 'not-attached')
     end
     if self.isDirty then
-        return true
+        return logTransferDecision(self, true, 'dirty')
     end
     if not fs.statSync(self.undoPath) then
         if type(vim.in_fast_event) == 'function' and vim.in_fast_event() then
-            return true
+            return logTransferDecision(self, true, 'native-undo-missing-fast-event')
         end
-        return not self:isEmpty()
+        return logTransferDecision(self, not self:isEmpty(), 'native-undo-missing')
     end
     if fs.statSync(self.fallbackPath) then
-        return false
+        return logTransferDecision(self, false, 'fallback-exists')
     end
     -- If the archive is missing but Neovim successfully loaded a native undo
     -- tree, save the matching file contents. Avoid inspecting the undo list in
     -- fast-event async paths because that requires non-fast Neovim APIs.
     if type(vim.in_fast_event) == 'function' and vim.in_fast_event() then
-        return true
+        return logTransferDecision(self, true, 'fallback-missing-fast-event')
     end
-    return not self:isEmpty()
+    return logTransferDecision(self, not self:isEmpty(), 'fallback-missing')
 end
 
 function Undo:transfer()
     return async(function()
         if not self:shouldTransfer() then
+            log.debug('transfer skipped:', self.bufnr, self.name or '')
             return
         end
+        log.debug('transfer started:', self.bufnr, self.name or '')
         local undo = await(self:saveUndoAsync())
         if not undo.ok then
             pcall(log.warn, 'failed to save undo file:', self.undoPath, undo.err)
@@ -340,13 +389,16 @@ function Undo:transfer()
         await(fs.copyFile(self.name, self.fallbackPath))
         self:saveBaseline()
         self.isDirty = false
+        log.debug('transfer completed:', self.bufnr, self.name, 'fallback:', self.fallbackPath)
     end)
 end
 
 function Undo:transferSync()
     if not self:shouldTransfer() then
+        log.debug('transferSync skipped:', self.bufnr, self.name or '')
         return
     end
+    log.debug('transferSync started:', self.bufnr, self.name or '')
     local undoOk, undoErr = self:saveUndo()
     if not undoOk then
         pcall(log.warn, 'failed to save undo file:', self.undoPath, undoErr)
@@ -360,26 +412,34 @@ function Undo:transferSync()
     fs.copyFileSync(self.name, self.fallbackPath)
     self:saveBaseline()
     self.isDirty = false
+    log.debug('transferSync completed:', self.bufnr, self.name, 'fallback:', self.fallbackPath)
 end
 
 function Undo:check()
     if not self.attached or self.undoPath == '' then
+        log.debug('check skipped:', self.bufnr, self.name or '', self.attached and 'empty-undo-path' or 'not-attached')
         return
     end
     if not self:isEmpty() then
+        log.debug('check skipped; undo tree is not empty:', self.bufnr, self.name or '')
         return
     end
+    log.debug('check started:', self.bufnr, self.name or '')
     local loaded, reason = self:loadFallBack()
     if loaded then
+        log.debug('check completed; fallback loaded:', self.bufnr, self.name or '')
         return
     end
     if reason == 'missing-fallback' and fs.statSync(self.undoPath) then
+        log.debug('check completed; native undo exists and fallback is missing:', self.bufnr, self.name or '')
         return
     end
     if self:loadBaseline() then
+        log.debug('check completed; baseline loaded:', self.bufnr, self.name or '')
         return
     end
     self:saveBaseline()
+    log.debug('check completed; baseline saved if possible:', self.bufnr, self.name or '')
 end
 
 return Undo
