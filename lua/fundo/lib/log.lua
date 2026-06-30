@@ -76,10 +76,15 @@ local function inspect(v)
     if t == 'nil' then
         s = 'nil'
     elseif t ~= 'string' then
-        s = vim.inspect(v)
+        local ok, inspected = pcall(vim.inspect, v, {newline = ' ', indent = ''})
+        s = ok and inspected or vim.inspect(v)
+    elseif v == '' then
+        s = '""'
     else
         s = tostring(v)
     end
+    s = s:gsub('\r', '\\r')
+    s = s:gsub('\n', '\\n')
     return s
 end
 

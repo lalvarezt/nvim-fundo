@@ -28,6 +28,15 @@ local function bufferName(bufnr)
     return ok and name or ''
 end
 
+local function logBufferEvent(name, bufnr)
+    local bufName = bufferName(bufnr)
+    if bufName == '' then
+        log.trace('event ' .. name .. ':', bufnr, bufName)
+    else
+        log.debug('event ' .. name .. ':', bufnr, bufName)
+    end
+end
+
 function Manager:detach(bufnr)
     local u = self.undos[bufnr]
     if u then
@@ -43,7 +52,7 @@ function Manager:detach(bufnr)
         self.undos[bufnr] = nil
         log.debug('detached buffer:', bufnr)
     else
-        log.debug('detach skipped; buffer is not attached:', bufnr, bufferName(bufnr))
+        log.trace('detach skipped; buffer is not attached:', bufnr, bufferName(bufnr))
     end
     return true
 end
@@ -55,7 +64,7 @@ function Manager:attach(bufnr)
             self.undos[bufnr] = u
             log.debug('attached buffer:', bufnr, bufferName(bufnr))
         else
-            log.debug('attach skipped:', bufnr, bufferName(bufnr))
+            log.trace('attach skipped:', bufnr, bufferName(bufnr))
         end
     end
     return self.undos[bufnr]
@@ -149,7 +158,6 @@ function Manager:syncAll(block)
                 log.debug(('syncAll wait elapsed %dms'):format((uv.hrtime() - now) / 1e6))
             end
             local results = await(p)
-            log.debug('results:', results)
             local failures = {}
             for bufnr, result in pairs(results) do
                 if result.status == 'rejected' then
@@ -197,32 +205,32 @@ function Manager:initialize()
         self.lastScannedtime = 0
     end))
     event:on('BufReadPost', function(bufnr)
-        log.debug('event BufReadPost:', bufnr, bufferName(bufnr))
+        logBufferEvent('BufReadPost', bufnr)
         local u = self:attach(bufnr)
         if u then
             u:check()
         end
     end, self.disposables)
     event:on('FileChangedShellPost', function(bufnr)
-        log.debug('event FileChangedShellPost:', bufnr, bufferName(bufnr))
+        logBufferEvent('FileChangedShellPost', bufnr)
         local u = self.undos[bufnr]
         if u then
             u:check()
         end
     end, self.disposables)
     event:on('BufWritePost', function(bufnr)
-        log.debug('event BufWritePost:', bufnr, bufferName(bufnr))
+        logBufferEvent('BufWritePost', bufnr)
         local u = self.undos[bufnr]
         if u then
             u:reset(true)
         end
     end, self.disposables)
     event:on('BufWipeout', function(bufnr)
-        log.debug('event BufWipeout:', bufnr, bufferName(bufnr))
+        logBufferEvent('BufWipeout', bufnr)
         self:detach(bufnr)
     end, self.disposables)
     event:on('BufUnload', function(bufnr)
-        log.debug('event BufUnload:', bufnr, bufferName(bufnr))
+        logBufferEvent('BufUnload', bufnr)
         self:detach(bufnr)
     end, self.disposables)
     event:on('CmdlineEnter', function(char)
