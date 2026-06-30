@@ -116,7 +116,13 @@ function Undo:loadFileAndUndo(winid)
         end)
         local undoOk, undoErr = self:loadUndo()
         if not undoOk then
+            api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
+            vim.bo[self.bufnr].modified = modified
+            if winid then
+                utils.restView(winid, view)
+            end
             pcall(log.warn, 'failed to load undo file:', self.undoPath, undoErr)
+            error(undoErr or ('failed to load undo file: ' .. self.undoPath))
         end
         api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
         vim.bo[self.bufnr].modified = modified
@@ -181,11 +187,13 @@ function Undo:transfer()
         local undo = await(self:saveUndoAsync())
         if not undo.ok then
             pcall(log.warn, 'failed to save undo file:', self.undoPath, undo.err)
+            error(undo.err or ('failed to save undo file: ' .. self.undoPath))
         end
         local stat = await(fs.stat(self.name))
-        if stat then
-            await(fs.copyFile(self.name, self.fallbackPath))
+        if not stat then
+            error('failed to stat buffer file: ' .. self.name)
         end
+        await(fs.copyFile(self.name, self.fallbackPath))
         self.isDirty = false
     end)
 end
@@ -197,11 +205,13 @@ function Undo:transferSync()
     local undoOk, undoErr = self:saveUndo()
     if not undoOk then
         pcall(log.warn, 'failed to save undo file:', self.undoPath, undoErr)
+        error(undoErr or ('failed to save undo file: ' .. self.undoPath))
     end
     local stat = fs.statSync(self.name)
-    if stat then
-        fs.copyFileSync(self.name, self.fallbackPath)
+    if not stat then
+        error('failed to stat buffer file: ' .. self.name)
     end
+    fs.copyFileSync(self.name, self.fallbackPath)
     self.isDirty = false
 end
 

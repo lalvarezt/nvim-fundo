@@ -30,10 +30,14 @@ function Manager:detach(bufnr)
         end)
         if not ok then
             pcall(log.warn, 'failed to transfer undo archive for buffer', bufnr, err)
+            u:dispose()
+            self.undos[bufnr] = nil
+            return false, err
         end
         u:dispose()
         self.undos[bufnr] = nil
     end
+    return true
 end
 
 function Manager:attach(bufnr)
@@ -122,6 +126,17 @@ function Manager:syncAll(block)
             end
             local results = await(p)
             log.debug('results:', results)
+            local failures = {}
+            for bufnr, result in pairs(results) do
+                if result.status == 'rejected' then
+                    local msg = ('buffer %s: %s'):format(bufnr, tostring(result.reason))
+                    table.insert(failures, msg)
+                    pcall(log.warn, 'failed to transfer undo archive:', msg)
+                end
+            end
+            if #failures > 0 then
+                error(table.concat(failures, '; '))
+            end
             -- 60 * 60 * 1e9 ns = 1 hour
             if not block and now - self.lastScannedtime > 60 * 60 * 1e9 then
                 self.lastScannedtime = now

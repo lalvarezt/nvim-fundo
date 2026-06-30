@@ -6,12 +6,12 @@ local utils = require('fundo.utils')
 local isWindows
 local unixSep, windowSep
 
-local function normalizeStr(res, str)
+local function normalizeStr(res, str, absolute)
     if str == '..' then
-        if #res == 0 then
-            table.insert(res, '..')
-        else
+        if #res > 0 and res[#res] ~= '..' then
             table.remove(res)
+        elseif not absolute then
+            table.insert(res, '..')
         end
     elseif str ~= '.' and str ~= '' then
         table.insert(res, str)
@@ -101,7 +101,7 @@ function Path.normalize(p)
     local trailingSep = rest ~= '' and rest:sub(-1) == Path.sep
     local res = {}
     for _, segment in ipairs(splitSegments(rest)) do
-        normalizeStr(res, segment)
+        normalizeStr(res, segment, absolute)
     end
     if #res == 0 then
         if absolute then

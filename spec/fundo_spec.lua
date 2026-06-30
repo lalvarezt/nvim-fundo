@@ -378,12 +378,122 @@ describe('fundo integration.', function()
         fs.copyFileSync = function()
             error('archive write failed')
         end
+        local ok, err = manager:detach(bufnr)
+        fs.copyFileSync = copyFileSync
+
+        assert.False(ok)
+        assert.truthy(tostring(err):match('archive write failed'))
+        assert.Nil(manager:get(bufnr))
+    end)
+
+    it('does not update the fallback archive when saving native undo fails.', function()
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        local bufnr = api.nvim_get_current_buf()
+        api.nvim_buf_set_lines(bufnr, 0, -1, false, {'one', 'two'})
+        vim.cmd('write')
+
+        local u = manager:get(bufnr)
+        assert.truthy(u, 'expected fundo to track the edited buffer')
+        clear_archives()
+        u.saveUndo = function()
+            return false, 'forced undo save failure'
+        end
+
         local ok, err = pcall(function()
-            manager:detach(bufnr)
+            u:transferSync()
+        end)
+
+        assert.False(ok)
+        assert.truthy(tostring(err):match('forced undo save failure'))
+        assert.True(u.isDirty)
+        assert.equal(0, #archives())
+    end)
+
+    it('keeps undo dirty when fallback archive transfer fails.', function()
+        local fs = require('fundo.fs')
+        local copyFileSync = fs.copyFileSync
+
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        local bufnr = api.nvim_get_current_buf()
+        api.nvim_buf_set_lines(bufnr, 0, -1, false, {'one', 'two'})
+        vim.cmd('write')
+
+        local u = manager:get(bufnr)
+        assert.truthy(u, 'expected fundo to track the edited buffer')
+        clear_archives()
+        fs.copyFileSync = function()
+            error('forced archive copy failure')
+        end
+
+        local ok, err = pcall(function()
+            u:transferSync()
         end)
         fs.copyFileSync = copyFileSync
 
-        assert.True(ok, err)
-        assert.Nil(manager:get(bufnr))
+        assert.False(ok)
+        assert.truthy(tostring(err):match('forced archive copy failure'))
+        assert.True(u.isDirty)
+        assert.equal(0, #archives())
+    end)
+
+    it('does not treat failed fallback undo loading as a repaired tree.', function()
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        local bufnr = api.nvim_get_current_buf()
+        api.nvim_buf_set_lines(bufnr, 0, -1, false, {'one', 'two'})
+        vim.cmd('write')
+        sync_all()
+
+        local u = manager:get(bufnr)
+        assert.truthy(u, 'expected fundo to track the edited buffer')
+        assert.False(u.isDirty)
+        api.nvim_buf_set_lines(bufnr, 0, -1, false, {'external', 'change'})
+        u.loadUndo = function()
+            return false, 'forced undo load failure'
+        end
+
+        local loaded = u:loadFallBack()
+
+        assert.False(loaded)
+        assert.False(u.isDirty)
+        assert.same({'external', 'change'}, buffer_lines())
+    end)
+
+    it('reports sync failures and keeps undo dirty.', function()
+        local fs = require('fundo.fs')
+        local copyFile = fs.copyFile
+
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        local bufnr = api.nvim_get_current_buf()
+        api.nvim_buf_set_lines(bufnr, 0, -1, false, {'one', 'two'})
+        vim.cmd('write')
+
+        local u = manager:get(bufnr)
+        assert.truthy(u, 'expected fundo to track the edited buffer')
+        fs.copyFile = function()
+            return promise.reject('forced async archive copy failure')
+        end
+
+        local finished = false
+        local ok = true
+        local err
+        manager:syncAll():thenCall(function()
+            finished = true
+        end, function(reason)
+            ok = false
+            err = reason
+            finished = true
+        end)
+        assert.True(vim.wait(1000, function()
+            return finished
+        end, 20, false), err)
+        fs.copyFile = copyFile
+
+        assert.False(ok)
+        assert.truthy(tostring(err):match('forced async archive copy failure'))
+        assert.True(u.isDirty)
     end)
 end)
