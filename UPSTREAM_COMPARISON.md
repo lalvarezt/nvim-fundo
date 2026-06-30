@@ -7,7 +7,8 @@ Comparison scope:
 
 The standard for keeping a divergence should be strict:
 
-- It directly supports the main goal: preserve the undo tree when file contents change outside Neovim, including while Neovim is closed.
+- It directly supports the main goal: preserve the undo tree when file contents change outside Neovim, including while
+Neovim is closed.
 - It makes preservation failures visible instead of silently clearing state.
 - It has tests that would fail if the behavior regressed.
 - It does not exist only because it was convenient during the fork.
@@ -59,7 +60,8 @@ Files:
 
 What changed:
 
-- `setup()` stores new config, reloads `fundo.config` if already loaded, disables the current instance, and enables again.
+- `setup()` stores new config, reloads `fundo.config` if already loaded, disables the current instance, and enables
+again.
 - `Config.reload()` mutates the existing config table instead of replacing the module return value.
 
 Why it exists:
@@ -104,7 +106,8 @@ Why it exists:
 
 - The core data-loss case happens when Neovim is closed, a tool edits a file, and Neovim later reopens it.
 - Same-process tests can pass while the real lifecycle still loses undo history.
-- Synchronous transfer at unload/exit is appropriate because preserving state is more important than avoiding a small blocking operation.
+- Synchronous transfer at unload/exit is appropriate because preserving state is more important than avoiding a small
+blocking operation.
 
 ### Handle external file changes while buffers remain loaded
 
@@ -144,7 +147,8 @@ What changed:
 
 Why it exists:
 
-- A native undo file and fallback archive are a pair. Updating one without the other can create a corrupt recovery state.
+- A native undo file and fallback archive are a pair. Updating one without the other can create a corrupt recovery
+state.
 - The previous fork behavior could copy a new archive after a failed `wundo`, then mark the buffer clean.
 - Silent success here is worse than an explicit failure because it hides a data-loss condition.
 
@@ -197,7 +201,8 @@ Files:
 
 What changed:
 
-- `Path.normalize()` handles Windows drive prefixes, repeated separators, trailing separators, absolute paths, and unresolved relative parents.
+- `Path.normalize()` handles Windows drive prefixes, repeated separators, trailing separators, absolute paths, and
+unresolved relative parents.
 - Recent fixes ensure:
   - `../..` stays `../..`
   - `../../x` stays `../../x`
@@ -267,7 +272,9 @@ Current verification:
 
 ## Bottom line
 
-Most of the divergence has a coherent reason: protect the native undo/fallback archive pair across external edits and process restarts. The critical keepers are the atomic transfer semantics, fallback repair correctness, unload/exit persistence, and subprocess tests.
+Most of the divergence has a coherent reason: protect the native undo/fallback archive pair across external edits and
+process restarts. The critical keepers are the atomic transfer semantics, fallback repair correctness, unload/exit
+persistence, and subprocess tests.
 
 ## Utility audit log
 
@@ -290,27 +297,38 @@ Verification after this audit:
 Changes made:
 
 - Removed `run = function() require('fundo').install() end` from README install examples.
-- Kept `require('fundo').install()` as a compatibility shim and documented that vendored dependencies mean it has no current install-time work.
+- Kept `require('fundo').install()` as a compatibility shim and documented that vendored dependencies mean it has no
+current install-time work.
 - Added event-emitter coverage that verifies listener failures are logged while later listeners still run.
 - Added filesystem coverage that verifies `copyFileSync()` removes temporary files when rename fails.
-- Added integration coverage for buffers loaded before `setup()`, invalid archive-directory setup, and failed detach transfer state.
+- Added integration coverage for buffers loaded before `setup()`, invalid archive-directory setup, and failed detach
+transfer state.
 - Fixed `Manager:detach()` so a failed synchronous archive transfer does not dispose and remove the tracked undo object.
 - Fixed `Undo:shouldTransfer()` so missing-fallback checks do not call non-fast Neovim APIs from fast-event async paths.
-- Fixed setup failure handling so a bad archive path does not leave the manager initialized or leak event handlers from a partial enable.
+- Fixed setup failure handling so a bad archive path does not leave the manager initialized or leak event handlers from
+a partial enable.
 
 Decisions:
 
 - Remove: README install hook. It was misleading because the vendored runtime requires no install step.
 - Keep: runtime `install()` symbol, but only as a compatibility shim for existing configs.
 - Keep: vendored `promise-async` as a deterministic supply/test dependency, not as a local behavior patch.
-- Keep: repeated setup/config reload. `spec/config_spec.lua` covers changing `archives_dir` and `limit_archives_size` on repeated setup.
-- Keep: attaching already-loaded buffers. `spec/fundo_spec.lua` now proves a file opened before `setup()` is tracked and preserves undo after an external edit.
-- Keep: `BufUnload`, `BufWipeout`, `VimLeave`, and `VimSuspend` sync behavior. Existing integration and closed-session tests cover these preservation paths.
-- Keep: `FileChangedShellPost`. The loaded-buffer external-change test covers `:checktime` restoring file content and undo history.
-- Keep/Fix: archive transfer and fallback repair semantics. The audit found that failed detach transfer used to drop the undo object; it now stays tracked and dirty for retry.
-- Keep/Fix: event listener isolation. Listener failures remain isolated, and tests now prove they are observable via logging.
-- Experiment needed: `CmdlineEnter` sync. No new evidence was added in this pass; keep it pending a scenario or performance check.
-- Keep current path exports. `basename`, `dirname`, `normalize`, and `join` all have production callers, so the scope risk is future expansion rather than currently unused code.
+- Keep: repeated setup/config reload. `spec/config_spec.lua` covers changing `archives_dir` and `limit_archives_size` on
+repeated setup.
+- Keep: attaching already-loaded buffers. `spec/fundo_spec.lua` now proves a file opened before `setup()` is tracked and
+preserves undo after an external edit.
+- Keep: `BufUnload`, `BufWipeout`, `VimLeave`, and `VimSuspend` sync behavior. Existing integration and closed-session
+tests cover these preservation paths.
+- Keep: `FileChangedShellPost`. The loaded-buffer external-change test covers `:checktime` restoring file content and
+undo history.
+- Keep/Fix: archive transfer and fallback repair semantics. The audit found that failed detach transfer used to drop the
+undo object; it now stays tracked and dirty for retry.
+- Keep/Fix: event listener isolation. Listener failures remain isolated, and tests now prove they are observable via
+logging.
+- Experiment needed: `CmdlineEnter` sync. No new evidence was added in this pass; keep it pending a scenario or
+performance check.
+- Keep current path exports. `basename`, `dirname`, `normalize`, and `join` all have production callers, so the scope
+risk is future expansion rather than currently unused code.
 
 Vendored runtime evidence:
 
@@ -321,9 +339,12 @@ Vendored runtime evidence:
 - `lua/promise-async/error.lua`: identical.
 - `lua/promise-async/loop.lua`: identical.
 - `lua/promise-async/utils.lua`: identical.
-- Conclusion: vendoring is currently a packaging/determinism decision. There are no local runtime modifications to audit separately.
+- Conclusion: vendoring is currently a packaging/determinism decision. There are no local runtime modifications to audit
+separately.
 
 Known remaining audit questions:
 
-- `CmdlineEnter` sync still needs a targeted scenario showing that it prevents a real external-edit race, or a performance check showing that its extra background sync attempts are negligible.
-- Path helper behavior should not expand beyond archive naming, config path normalization, Windows/root handling, and parent traversal safety without new production callers and tests.
+- `CmdlineEnter` sync still needs a targeted scenario showing that it prevents a real external-edit race, or a
+performance check showing that its extra background sync attempts are negligible.
+- Path helper behavior should not expand beyond archive naming, config path normalization, Windows/root handling, and
+parent traversal safety without new production callers and tests.
