@@ -46,6 +46,17 @@ describe('log module.', function()
         assert.True(text:find('hidden debug message', 1, true) == nil)
     end)
 
+    it('sets log directory and file permissions to owner-only.', function()
+        local logdir = tmpdir .. path.sep .. 'private'
+        local logfile = logdir .. path.sep .. 'fundo.log'
+        log.configure({enabled = true, level = 'debug', path = logfile})
+
+        log.debug('private log')
+
+        assert.equal(448, vim.loop.fs_stat(logdir).mode % 512)
+        assert.equal(384, vim.loop.fs_stat(logfile).mode % 512)
+    end)
+
     it('uses FUNDO_LOG to enable logging during initialization.', function()
         vim.env.FUNDO_LOG = 'debug'
         package.loaded['fundo.lib.log'] = nil

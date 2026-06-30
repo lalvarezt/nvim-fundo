@@ -21,6 +21,8 @@ local levelNr
 local defaultLevel
 local enabled
 local logDateFmt = '%y-%m-%d %T'
+local logDirMode = 448 -- 0o700
+local logFileMode = 384 -- 0o600
 
 local function pathSep()
     return uv.os_uname().sysname == 'Windows_NT' and [[\]] or '/'
@@ -100,6 +102,7 @@ function Log.configure(opts)
         local dir = dirname(Log.path)
         if dir then
             fn.mkdir(dir, 'p')
+            pcall(uv.fs_chmod, dir, logDirMode)
         end
     end
 end
@@ -132,6 +135,7 @@ local function init()
             local str = string.format('[%s] [%s] %s : %s\n', os.date(logDateFmt), l, linfo, msg)
             fp:write(str)
             fp:close()
+            pcall(uv.fs_chmod, Log.path, logFileMode)
         end
     end
 end

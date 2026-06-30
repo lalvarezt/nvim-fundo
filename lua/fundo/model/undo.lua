@@ -11,6 +11,8 @@ local utils = require('fundo.utils')
 local log = require('fundo.lib.log')
 local config = require('fundo.config')
 
+local archiveDirMode = 448 -- 0o700
+
 ---@class FundoUndo
 ---@field dir string
 ---@field bufnr number
@@ -187,7 +189,7 @@ function Undo:saveBaseline()
         return false
     end
     local ok, err = pcall(function()
-        fs.mkdirpSync(path.dirname(self.baselinePath), 493)
+        fs.mkdirpSync(path.dirname(self.baselinePath), archiveDirMode)
         fs.copyFileSync(self.name, self.baselinePath)
     end)
     if not ok then
@@ -403,7 +405,7 @@ function Undo:transfer()
         if not stat then
             error('failed to stat buffer file: ' .. self.name)
         end
-        fs.mkdirpSync(path.dirname(self.fallbackPath), 493)
+        fs.mkdirpSync(path.dirname(self.fallbackPath), archiveDirMode)
         await(fs.copyFile(self.name, self.fallbackPath))
         self:saveBaseline()
         self.isDirty = false
@@ -426,7 +428,7 @@ function Undo:transferSync()
     if not stat then
         error('failed to stat buffer file: ' .. self.name)
     end
-    fs.mkdirpSync(path.dirname(self.fallbackPath), 493)
+    fs.mkdirpSync(path.dirname(self.fallbackPath), archiveDirMode)
     fs.copyFileSync(self.name, self.fallbackPath)
     self:saveBaseline()
     self.isDirty = false

@@ -581,6 +581,18 @@ describe('fundo integration.', function()
         assert.equal('directory', fs.statSync(nestedArchivesDir).type)
     end)
 
+    it('sets the configured archive directory to owner-only permissions.', function()
+        local fs = require('fundo.fs')
+        local privateArchivesDir = path.join(tmpdir, 'private-archives')
+
+        require('fundo').setup({
+            archives_dir = privateArchivesDir,
+            limit_archives_size = 16,
+        })
+
+        assert.equal(448, fs.statSync(privateArchivesDir).mode % 512)
+    end)
+
     it('fails setup when the configured archive path is not a directory.', function()
         local invalidArchivesDir = path.join(tmpdir, 'archive-file')
         fn.writefile({'not a directory'}, invalidArchivesDir)
