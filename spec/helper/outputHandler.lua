@@ -13,7 +13,7 @@ return function(options)
         end
     end)
 
-    require('promise').loop.callWrapper = function(callback)
+    rawset(require('promise').loop, 'callWrapper', function(callback)
         local ok, res = pcall(callback)
         if ok then
             return
@@ -24,6 +24,6 @@ return function(options)
             return
         end
         table.insert(promiseUnhandledError, msg)
-    end
+    end)
     return handler
 end

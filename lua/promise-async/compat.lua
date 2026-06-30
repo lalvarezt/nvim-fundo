@@ -7,19 +7,17 @@ function M.is51()
     return _G._VERSION:sub(-3) == '5.1' and not jit
 end
 
+local pack
 if table.pack then
-    M.pack = table.pack
+    pack = table.pack
 else
-    M.pack = function(...)
+    pack = function(...)
         return {n = select('#', ...), ...}
     end
 end
+M.pack = pack
 
-if table.unpack then
-    M.unpack = table.unpack
-else
-    M.unpack = unpack
-end
+M.unpack = table.unpack or unpack
 ---@diagnostic enable: deprecated
 
 if M.is51() then

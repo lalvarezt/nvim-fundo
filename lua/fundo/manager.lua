@@ -8,6 +8,7 @@ local promise = require('promise')
 local utils = require('fundo.utils')
 local undo = require('fundo.model.undo')
 local async = require('async')
+local await = async.wait
 local config = require('fundo.config')
 local fs = require('fundo.fs')
 local log = require('fundo.lib.log')

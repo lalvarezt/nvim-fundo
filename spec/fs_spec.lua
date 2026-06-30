@@ -2,6 +2,7 @@ local pwd = os.getenv('PWD')
 local fs = require('fundo.fs')
 local path = require('fundo.fs.path')
 local async = require('async')
+local await = async.wait
 
 
 describe('fs module on Unix.', function()

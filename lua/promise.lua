@@ -89,6 +89,8 @@ end
 
 local resolvePromise, rejectPromise
 
+---@alias PromiseExecutor fun(resolve: fun(value?: any), reject: fun(reason?: any))
+
 ---@param promise Promise
 local function handleQueue(promise)
     local queue = promise.queue

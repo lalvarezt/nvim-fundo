@@ -1,7 +1,7 @@
 local uv = vim.loop
 
 ---@class FundoDebounce
----@field timer userdata
+---@field timer FundoUvTimer?
 ---@field fn function
 ---@field args table
 ---@field wait number
@@ -31,7 +31,7 @@ function Debounce:call(...)
     local timer = self.timer
     self.args = {...}
     if not timer then
-        ---@type userdata
+        ---@type FundoUvTimer
         timer = uv.new_timer()
         self.timer = timer
         local wait = self.wait

@@ -1,17 +1,22 @@
 local uv = require('luv')
 
 ---@class PromiseAsyncLoop
----@field tick userdata
+---@field tick FundoUvTimer
 ---@field tickCallbacks function[]
 ---@field tickStarted boolean
----@field idle userdata
+---@field idle FundoUvIdle
 ---@field idleCallbacks function[]
 ---@field idleStarted boolean
+---@type FundoUvTimer
+local tick = uv.new_timer()
+---@type FundoUvIdle
+local idle = uv.new_idle()
+
 local EventLoop = {
-    tick = uv.new_timer(),
+    tick = tick,
     tickCallbacks = {},
     tickStarted = false,
-    idle = uv.new_idle(),
+    idle = idle,
     idleCallbacks = {},
     idleStarted = false
 }

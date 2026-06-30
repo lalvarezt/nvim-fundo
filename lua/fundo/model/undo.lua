@@ -3,6 +3,7 @@ local fn = vim.fn
 local cmd = vim.cmd
 
 local async = require('async')
+local await = async.wait
 local promise = require('promise')
 local path = require('fundo.fs.path')
 local fs = require('fundo.fs')

@@ -2,6 +2,7 @@ local api = vim.api
 local fn = vim.fn
 local uv = vim.loop
 local async = require('async')
+local await = async.wait
 local promise = require('promise')
 local manager = require('fundo.manager')
 local path = require('fundo.fs.path')
@@ -31,7 +32,7 @@ describe('fundo integration.', function()
     local function assert_history_restores_to(expected, redo_expected)
         redo_expected = redo_expected or {'external', 'change'}
         local undolist = api.nvim_exec('undolist', true)
-        assert.truthy(undolist:match('^number'), 'expected undo history to be available')
+        assert(undolist:match('^number'), 'expected undo history to be available')
         vim.cmd('undo')
         assert.same(expected, buffer_lines())
         vim.cmd('redo')
@@ -70,10 +71,10 @@ describe('fundo integration.', function()
             err = reason
             finished = true
         end)
-        assert.True(vim.wait(1000, function()
+        assert(vim.wait(1000, function()
             return finished
         end, 20, false), err)
-        assert.True(ok, err)
+        assert(ok, err)
     end
 
     before_each(function()
@@ -167,9 +168,9 @@ describe('fundo integration.', function()
         clear_archives()
 
         local u = manager:get(api.nvim_get_current_buf())
-        assert.truthy(u, 'expected fundo to track the edited buffer')
-        assert.False(u.isDirty, 'expected the native undo file to already be synced')
-        assert.True(u:shouldTransfer(), 'expected missing archive to be recreated')
+        assert(u, 'expected fundo to track the edited buffer')
+        assert(u.isDirty == false, 'expected the native undo file to already be synced')
+        assert(u:shouldTransfer(), 'expected missing archive to be recreated')
 
         vim.cmd('bwipeout!')
         assert.are_not.equal(0, #archives())
@@ -205,7 +206,7 @@ describe('fundo integration.', function()
         fn.writefile({'external', 'change'}, file)
         local ok, err = pcall(vim.cmd, 'checktime')
 
-        assert.True(ok, err)
+        assert(ok, err)
         assert.same({'one', 'two'}, buffer_lines())
         assert.True(vim.bo.modified)
     end)
@@ -353,7 +354,7 @@ describe('fundo integration.', function()
             limit_archives_size = 16,
         })
         local u = manager:get(api.nvim_get_current_buf())
-        assert.truthy(u, 'expected setup to attach the already-loaded file buffer')
+        assert(u, 'expected setup to attach the already-loaded file buffer')
         sync_all()
 
         assert.are_not.equal(0, #archives())
@@ -443,8 +444,8 @@ describe('fundo integration.', function()
                     vim.cmd('write')
 
                     local u = manager:get(api.nvim_get_current_buf())
-                    assert.truthy(u, 'expected fundo to track the edited buffer')
-                    assert.True(u:shouldTransfer(), 'expected written buffer to need transfer')
+                    assert(u, 'expected fundo to track the edited buffer')
+                    assert(u:shouldTransfer(), 'expected written buffer to need transfer')
 
                     missing_case.mutate()
                     close_case.persist()
@@ -542,7 +543,7 @@ describe('fundo integration.', function()
         local ok, err = wait()
         fs.unlink = unlink
 
-        assert.True(ok, err)
+        assert(ok, err)
     end)
 
     it('creates missing parent directories for a nested archive directory.', function()
@@ -585,21 +586,21 @@ describe('fundo integration.', function()
         api.nvim_buf_set_lines(bufnr, 0, -1, false, {'one', 'two'})
         vim.cmd('write')
 
-        fs.copyFileSync = function()
+        rawset(fs, 'copyFileSync', function()
             error('archive write failed')
-        end
+        end)
         local ok, err = manager:detach(bufnr)
-        fs.copyFileSync = copyFileSync
+        rawset(fs, 'copyFileSync', copyFileSync)
 
         assert.False(ok)
         assert.truthy(tostring(err):match('archive write failed'))
         local u = manager:get(bufnr)
-        assert.truthy(u, 'expected failed detach to leave the undo object available for retry')
+        assert(u, 'expected failed detach to leave the undo object available for retry')
         assert.True(u.isDirty)
 
         ok, err = manager:detach(bufnr)
 
-        assert.True(ok, err)
+        assert(ok, err)
         assert.falsy(manager:get(bufnr))
         vim.cmd('bwipeout!')
         fn.writefile({'external', 'change'}, file)
@@ -616,7 +617,7 @@ describe('fundo integration.', function()
         vim.cmd('write')
 
         local u = manager:get(bufnr)
-        assert.truthy(u, 'expected fundo to track the edited buffer')
+        assert(u, 'expected fundo to track the edited buffer')
         clear_archives()
         u.saveUndo = function()
             return false, 'forced undo save failure'
@@ -643,16 +644,16 @@ describe('fundo integration.', function()
         vim.cmd('write')
 
         local u = manager:get(bufnr)
-        assert.truthy(u, 'expected fundo to track the edited buffer')
+        assert(u, 'expected fundo to track the edited buffer')
         clear_archives()
-        fs.copyFileSync = function()
+        rawset(fs, 'copyFileSync', function()
             error('forced archive copy failure')
-        end
+        end)
 
         local ok, err = pcall(function()
             u:transferSync()
         end)
-        fs.copyFileSync = copyFileSync
+        rawset(fs, 'copyFileSync', copyFileSync)
 
         assert.False(ok)
         assert.truthy(tostring(err):match('forced archive copy failure'))
@@ -669,7 +670,7 @@ describe('fundo integration.', function()
         sync_all()
 
         local u = manager:get(bufnr)
-        assert.truthy(u, 'expected fundo to track the edited buffer')
+        assert(u, 'expected fundo to track the edited buffer')
         assert.False(u.isDirty)
         api.nvim_buf_set_lines(bufnr, 0, -1, false, {'external', 'change'})
         u.loadUndo = function()
@@ -694,10 +695,10 @@ describe('fundo integration.', function()
         vim.cmd('write')
 
         local u = manager:get(bufnr)
-        assert.truthy(u, 'expected fundo to track the edited buffer')
-        fs.copyFile = function()
+        assert(u, 'expected fundo to track the edited buffer')
+        rawset(fs, 'copyFile', function()
             return promise.reject('forced async archive copy failure')
-        end
+        end)
 
         local finished = false
         local ok = true
@@ -709,10 +710,10 @@ describe('fundo integration.', function()
             err = reason
             finished = true
         end)
-        assert.True(vim.wait(1000, function()
+        assert(vim.wait(1000, function()
             return finished
         end, 20, false), err)
-        fs.copyFile = copyFile
+        rawset(fs, 'copyFile', copyFile)
 
         assert.False(ok)
         assert.truthy(tostring(err):match('forced async archive copy failure'))

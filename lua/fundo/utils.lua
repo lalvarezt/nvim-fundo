@@ -89,6 +89,7 @@ end
 ---@return Promise
 function M.wait(ms)
     return require('promise')(function(resolve)
+        ---@type FundoUvTimer
         local timer = uv.new_timer()
         timer:start(ms, 0, function()
             timer:close()
@@ -100,9 +101,9 @@ end
 ---
 ---@param callback function
 ---@param ms number
----@return userdata
+---@return FundoUvTimer
 function M.setTimeout(callback, ms)
-    ---@type userdata
+    ---@type FundoUvTimer
     local timer = uv.new_timer()
     timer:start(ms, 0, function()
         timer:close()

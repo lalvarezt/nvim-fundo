@@ -1,4 +1,5 @@
 local async = require('async')
+local await = async.wait
 local uv = vim.loop
 local uvw = require('fundo.fs.uvwrapper')
 local path = require('fundo.fs.path')

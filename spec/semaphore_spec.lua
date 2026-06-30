@@ -1,6 +1,7 @@
 local helper    = require('spec.helper.init')
 local promise   = require('promise')
 local async     = require('async')
+local await     = async.wait
 local semaphore = require('fundo.lib.semaphore')
 local mutex     = require('fundo.lib.mutex')
 
