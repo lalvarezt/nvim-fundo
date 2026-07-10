@@ -53,8 +53,39 @@ describe('log module.', function()
 
         log.debug('private log')
 
-        assert.equal(448, vim.loop.fs_stat(logdir).mode % 512)
-        assert.equal(384, vim.loop.fs_stat(logfile).mode % 512)
+        if not require('fundo.utils').isWindows() then
+            assert.equal(448, vim.loop.fs_stat(logdir).mode % 512)
+            assert.equal(384, vim.loop.fs_stat(logfile).mode % 512)
+        end
+    end)
+
+    it('does not change permissions on an existing log parent.', function()
+        if require('fundo.utils').isWindows() then
+            return
+        end
+        vim.loop.fs_chmod(tmpdir, 493)
+
+        local ok, err = log.configure({
+            enabled = true,
+            level = 'debug',
+            path = tmpdir .. path.sep .. 'fundo.log',
+        })
+
+        assert(ok, err)
+        assert.equal(493, vim.loop.fs_stat(tmpdir).mode % 512)
+    end)
+
+    it('keeps invalid log targets non-fatal and suppresses later writes.', function()
+        local target = tmpdir .. path.sep .. 'directory-target'
+        vim.fn.mkdir(target, 'p')
+
+        local configured = log.configure({enabled = true, level = 'debug', path = target})
+        local ok, wrote, err = pcall(log.error, 'must not escape the logger')
+
+        assert.False(configured)
+        assert.True(ok)
+        assert.False(wrote)
+        assert.truthy(err)
     end)
 
     it('uses FUNDO_LOG to enable logging during initialization.', function()

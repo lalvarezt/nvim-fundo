@@ -71,6 +71,7 @@ function M.disable()
         log.debug('disable skipped; already disabled')
         return false
     end
+    manager:syncAllSync()
     disposable.disposeAll(disposables)
     enabled = false
     log.info('disabled')
