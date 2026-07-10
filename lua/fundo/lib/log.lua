@@ -5,7 +5,7 @@
 ---@field info fun(...)
 ---@field warn fun(...)
 ---@field error fun(...)
----@field configure fun(opts?: FundoLoggingConfig)
+---@field configure fun(opts?: FundoLoggingConfig): boolean, any?
 ---@field setLevel fun(level: number|string)
 ---@field isEnabled fun(level: number|string): boolean
 ---@field level fun(): string
@@ -14,18 +14,21 @@
 local Log = {}
 local fn = vim.fn
 local uv = vim.loop
+local fs = require('fundo.fs')
 
 ---@type table<string, number>
 local levelMap
 local levelNr
 local defaultLevel
 local enabled
+local writeError
 local logDateFmt = '%y-%m-%d %T'
 local logDirMode = 448 -- 0o700
 local logFileMode = 384 -- 0o600
+local isWindows = uv.os_uname().sysname == 'Windows_NT'
 
 local function pathSep()
-    return uv.os_uname().sysname == 'Windows_NT' and [[\]] or '/'
+    return isWindows and [[\]] or '/'
 end
 
 local function defaultPath()
@@ -58,7 +61,7 @@ end
 ---@param l number|string
 ---@return boolean
 function Log.isEnabled(l)
-    return enabled and getLevelNr(l) >= levelNr
+    return enabled and not writeError and getLevelNr(l) >= levelNr
 end
 
 ---
@@ -97,14 +100,33 @@ function Log.configure(opts)
     Log.enabled = enabled
     Log.path = fn.expand(opts.path or defaultPath())
     Log.setLevel(opts.level or defaultLevel)
+    writeError = nil
 
     if enabled then
         local dir = dirname(Log.path)
         if dir then
-            fn.mkdir(dir, 'p')
-            pcall(uv.fs_chmod, dir, logDirMode)
+            local ok, err = pcall(fs.mkdirpSync, dir, logDirMode)
+            if not ok then
+                writeError = err
+                return false, err
+            end
+        end
+        local fd, err = uv.fs_open(Log.path, 'a', logFileMode)
+        if not fd then
+            writeError = err or ('failed to open log file: ' .. Log.path)
+            return false, writeError
+        end
+        local chmodOk, chmodErr = true, nil
+        if not isWindows then
+            chmodOk, chmodErr = uv.fs_chmod(Log.path, logFileMode)
+        end
+        local closeOk, closeErr = uv.fs_close(fd)
+        if not chmodOk or not closeOk then
+            writeError = chmodErr or closeErr or ('failed to secure log file: ' .. Log.path)
+            return false, writeError
         end
     end
+    return true
 end
 
 local function init()
@@ -120,7 +142,7 @@ local function init()
         Log[l:lower()] = function(...)
             local argc = select('#', ...)
             if argc == 0 or not Log.isEnabled(l) then
-                return
+                return false, writeError
             end
             local msgTbl = {}
             for i = 1, argc do
@@ -131,11 +153,23 @@ local function init()
             local info = debug.getinfo(2, 'Sl')
             local linfo = info.short_src:match('[^/]*$') .. ':' .. info.currentline
 
-            local fp = assert(io.open(Log.path, 'a+'))
             local str = string.format('[%s] [%s] %s : %s\n', os.date(logDateFmt), l, linfo, msg)
-            fp:write(str)
-            fp:close()
-            pcall(uv.fs_chmod, Log.path, logFileMode)
+            local ok, err = pcall(function()
+                local fd, openErr = uv.fs_open(Log.path, 'a', logFileMode)
+                if not fd then
+                    error(openErr or ('failed to open log file: ' .. Log.path))
+                end
+                local _, writeErr = uv.fs_write(fd, str, -1)
+                local closeOk, closeErr = uv.fs_close(fd)
+                if writeErr or not closeOk then
+                    error(writeErr or closeErr or ('failed to write log file: ' .. Log.path))
+                end
+            end)
+            if not ok then
+                writeError = err
+                return false, err
+            end
+            return true
         end
     end
 end

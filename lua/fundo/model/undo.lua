@@ -200,6 +200,52 @@ function Undo:saveBaseline()
     return true
 end
 
+local function saveBaselineSnapshot(transfer)
+    local stat = fs.statSync(transfer.name)
+    local limit = config.limit_archives_size * 1024 * 1024
+    if limit <= 0 or not stat or (stat.type and stat.type ~= 'file')
+        or type(stat.size) ~= 'number' or stat.size > limit then
+        pcall(fs.unlinkSync, transfer.baselinePath)
+        return false
+    end
+    local ok = pcall(function()
+        fs.mkdirpSync(path.dirname(transfer.baselinePath), archiveDirMode)
+        fs.copyFileSync(transfer.name, transfer.baselinePath)
+    end)
+    return ok
+end
+
+function Undo.completePendingTransferSync(transfer)
+    local stat = fs.statSync(transfer.name)
+    if not stat then
+        error('failed to stat buffer file: ' .. transfer.name)
+    end
+    fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
+    fs.copyFileSync(transfer.name, transfer.fallbackPath)
+    saveBaselineSnapshot(transfer)
+end
+
+function Undo.completePendingTransfer(transfer)
+    return async(function()
+        local stat = await(fs.stat(transfer.name))
+        if not stat then
+            error('failed to stat buffer file: ' .. transfer.name)
+        end
+        fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
+        await(fs.copyFile(transfer.name, transfer.fallbackPath))
+        saveBaselineSnapshot(transfer)
+    end)
+end
+
+function Undo:transferSnapshot()
+    return {
+        name = self.name,
+        undoPath = self.undoPath,
+        fallbackPath = self.fallbackPath,
+        baselinePath = self.baselinePath,
+    }
+end
+
 function Undo:readBaseline()
     if not self.baselinePath or not fs.statSync(self.baselinePath) then
         log.trace('readBaseline skipped; baseline missing:', self.baselinePath or '')
@@ -340,10 +386,15 @@ function Undo:loadFallBack()
     if preferredWinid == -1 then
         loaded, reason = self:loadFileAndUndo()
     elseif winids then
+        local views = {}
         for _, winid in ipairs(winids) do
-            local ok, err = self:loadFileAndUndo(winid)
-            loaded = ok or loaded
-            reason = ok and reason or (err or reason)
+            views[winid] = utils.saveView(winid)
+        end
+        loaded, reason = self:loadFileAndUndo(preferredWinid)
+        for winid, view in pairs(views) do
+            if utils.isWinValid(winid) then
+                pcall(utils.restView, winid, view)
+            end
         end
     else
         loaded, reason = self:loadFileAndUndo(preferredWinid)
@@ -401,15 +452,12 @@ function Undo:transfer()
             pcall(log.warn, 'failed to save undo file:', self.undoPath, undo.err)
             error(undo.err or ('failed to save undo file: ' .. self.undoPath))
         end
-        local stat = await(fs.stat(self.name))
-        if not stat then
-            error('failed to stat buffer file: ' .. self.name)
-        end
-        fs.mkdirpSync(path.dirname(self.fallbackPath), archiveDirMode)
-        await(fs.copyFile(self.name, self.fallbackPath))
-        self:saveBaseline()
+        local transfer = self:transferSnapshot()
+        self.pendingTransfer = transfer
+        await(Undo.completePendingTransfer(transfer))
+        self.pendingTransfer = nil
         self.isDirty = false
-        log.debug('transfer completed:', self.bufnr, self.name, 'fallback:', self.fallbackPath)
+        log.debug('transfer completed:', self.bufnr, transfer.name, 'fallback:', transfer.fallbackPath)
     end)
 end
 
@@ -424,15 +472,12 @@ function Undo:transferSync()
         pcall(log.warn, 'failed to save undo file:', self.undoPath, undoErr)
         error(undoErr or ('failed to save undo file: ' .. self.undoPath))
     end
-    local stat = fs.statSync(self.name)
-    if not stat then
-        error('failed to stat buffer file: ' .. self.name)
-    end
-    fs.mkdirpSync(path.dirname(self.fallbackPath), archiveDirMode)
-    fs.copyFileSync(self.name, self.fallbackPath)
-    self:saveBaseline()
+    local transfer = self:transferSnapshot()
+    self.pendingTransfer = transfer
+    Undo.completePendingTransferSync(transfer)
+    self.pendingTransfer = nil
     self.isDirty = false
-    log.debug('transferSync completed:', self.bufnr, self.name, 'fallback:', self.fallbackPath)
+    log.debug('transferSync completed:', self.bufnr, transfer.name, 'fallback:', transfer.fallbackPath)
 end
 
 function Undo:check()

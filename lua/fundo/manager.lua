@@ -48,6 +48,11 @@ function Manager:detach(bufnr)
         end)
         if not ok then
             pcall(log.warn, 'failed to transfer undo archive for buffer', bufnr, err)
+            if u.pendingTransfer then
+                self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
+                u:dispose()
+                self.undos[bufnr] = nil
+            end
             return false, err
         end
         u:dispose()
@@ -94,10 +99,22 @@ function Manager:scanArchivesDir()
     return async(function()
         log.debug('scanning archives dir:', self.archivesDir)
         local statTbl = await(self:listFileStats(self.archivesDir, 1024))
-        local stats = {}
+        local records = {}
         for name, stat in pairs(statTbl) do
-            table.insert(stats, {name = name, mtime = stat.mtime.sec, size = stat.size})
+            if name:sub(-5) == '.base' then
+                local key = name:sub(1, -6)
+                local record = records[key] or {name = key}
+                record.baseline = {name = name, mtime = stat.mtime.sec, size = stat.size}
+                record.mtime = math.max(record.mtime or 0, stat.mtime.sec)
+                records[key] = record
+            else
+                local record = records[name] or {name = name}
+                record.fallback = {name = name, mtime = stat.mtime.sec, size = stat.size}
+                record.mtime = math.max(record.mtime or 0, stat.mtime.sec)
+                records[name] = record
+            end
         end
+        local stats = vim.tbl_values(records)
         table.sort(stats, function(a, b)
             return a.mtime > b.mtime
         end)
@@ -105,14 +122,25 @@ function Manager:scanArchivesDir()
         local limit = self.limitArchivesSize * 1024 * 1024
         local tasks = {}
         local removed = 0
-        for _, stat in ipairs(stats) do
-            if size + stat.size > limit then
+        local function remove(stat)
+            if stat then
                 local p = path.join(self.archivesDir, stat.name)
                 log.debug('archive will be pruned:', p, 'size:', stat.size)
                 tasks[p] = fs.unlink(p)
                 removed = removed + 1
+            end
+        end
+        for _, record in ipairs(stats) do
+            if record.fallback and size + record.fallback.size <= limit then
+                size = size + record.fallback.size
+                if record.baseline and size + record.baseline.size <= limit then
+                    size = size + record.baseline.size
+                else
+                    remove(record.baseline)
+                end
             else
-                size = size + stat.size
+                remove(record.fallback)
+                remove(record.baseline)
             end
         end
         local results = await(promise.allSettled(tasks))
@@ -142,9 +170,21 @@ function Manager:syncAll(block)
                     tasks[bufnr] = u:transfer()
                 end
             end
+            for key, transfer in pairs(self.pendingTransfers) do
+                local pendingKey = key
+                tasks['pending:' .. pendingKey] = undo.completePendingTransfer(transfer):thenCall(function(value)
+                    self.pendingTransfers[pendingKey] = nil
+                    return value
+                end)
+            end
             log.debug('syncAll started:', 'block:', block == true, 'considered:', considered, 'transfers:', vim.tbl_count(tasks))
             if vim.tbl_isempty(tasks) then
-                log.debug('syncAll skipped; no buffers need transfer')
+                local now = uv.hrtime()
+                if not block and now - self.lastScannedtime > 60 * 60 * 1e9 then
+                    await(self:scanArchivesDir())
+                    self.lastScannedtime = uv.hrtime()
+                end
+                log.debug('syncAll completed; no buffers need transfer')
                 return
             end
             local res = false
@@ -173,13 +213,44 @@ function Manager:syncAll(block)
             end
             -- 60 * 60 * 1e9 ns = 1 hour
             if not block and now - self.lastScannedtime > 60 * 60 * 1e9 then
-                self.lastScannedtime = now
                 await(self:scanArchivesDir())
+                self.lastScannedtime = uv.hrtime()
             end
             log.info('syncAll completed:', 'block:', block == true, 'transfers:', vim.tbl_count(tasks), 'failures:', #failures)
             res = true
         end)
     end)
+end
+
+function Manager:syncAllSync()
+    local failures = {}
+    for bufnr, u in pairs(self.undos) do
+        local ok, err = pcall(function()
+            if u:shouldTransfer() then
+                u:transferSync()
+            end
+        end)
+        if not ok then
+            if u.pendingTransfer then
+                self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
+            else
+                table.insert(failures, ('buffer %s: %s'):format(bufnr, tostring(err)))
+            end
+        end
+    end
+    for key, transfer in pairs(self.pendingTransfers) do
+        local ok, err = pcall(undo.completePendingTransferSync, transfer)
+        if ok then
+            self.pendingTransfers[key] = nil
+        else
+            table.insert(failures, ('pending %s: %s'):format(key, tostring(err)))
+        end
+    end
+    if #failures > 0 then
+        pcall(log.warn, 'synchronous undo transfer failures:', table.concat(failures, '; '))
+        return false, table.concat(failures, '; ')
+    end
+    return true
 end
 
 function Manager:initialize()
@@ -190,8 +261,11 @@ function Manager:initialize()
     self.archivesDir = path.normalize(config.archives_dir)
     self.limitArchivesSize = config.limit_archives_size
     fs.mkdirpSync(self.archivesDir, archiveDirMode)
-    fs.chmodSync(self.archivesDir, archiveDirMode)
+    if not utils.isWindows() then
+        fs.chmodSync(self.archivesDir, archiveDirMode)
+    end
     self.undos = {}
+    self.pendingTransfers = self.pendingTransfers or {}
     self.lastScannedtime = uv.hrtime()
     self.mutex = mutex:new()
     self.disposables = {}
@@ -204,6 +278,7 @@ function Manager:initialize()
         end
         self.initialized = false
         self.undos = {}
+        self.pendingTransfers = {}
         self.lastScannedtime = 0
     end))
     event:on('BufReadPost', function(bufnr)
@@ -248,11 +323,11 @@ function Manager:initialize()
     end, self.disposables)
     event:on('VimLeave', function()
         log.debug('event VimLeave')
-        self:syncAll(true)
+        self:syncAllSync()
     end, self.disposables)
     event:on('VimSuspend', function()
         log.debug('event VimSuspend')
-        self:syncAll(true)
+        self:syncAllSync()
     end, self.disposables)
     event:on('TermEnter', function()
         log.debug('event TermEnter')

@@ -545,7 +545,48 @@ describe('fundo integration.', function()
 
         local remaining = fn.glob(path.join(archivesDir, '*'), false, true)
         assert.equal(1, #remaining)
-        assert.equal(archives[4], remaining[1])
+        local expectedFallback = path.join(archivesDir, path.basename(fn.undofile(file_b)))
+        assert.equal(expectedFallback, remaining[1])
+        assert.False(remaining[1]:sub(-5) == '.base')
+    end)
+
+    it('runs an overdue idle prune and retries after a scan failure.', function()
+        local scanArchivesDir = manager.scanArchivesDir
+        local previousScan = uv.hrtime() - 60 * 60 * 1e9 - 1
+        local scans = 0
+        manager.lastScannedtime = previousScan
+        manager.scanArchivesDir = function()
+            scans = scans + 1
+            if scans == 1 then
+                return promise.reject('forced scan failure')
+            end
+            return promise.resolve()
+        end
+
+        local function run_sync()
+            local finished = false
+            local ok = true
+            local err
+            manager:syncAll():thenCall(function()
+                finished = true
+            end, function(reason)
+                ok = false
+                err = reason
+                finished = true
+            end)
+            assert(vim.wait(1000, function() return finished end, 20, false), err)
+            return ok, err
+        end
+
+        local ok = run_sync()
+        assert.False(ok)
+        assert.equal(previousScan, manager.lastScannedtime)
+        ok = run_sync()
+        manager.scanArchivesDir = scanArchivesDir
+
+        assert.True(ok)
+        assert.equal(2, scans)
+        assert.True(manager.lastScannedtime > previousScan)
     end)
 
     it('does not fail the prune scan when an archive cannot be removed.', function()
@@ -590,7 +631,9 @@ describe('fundo integration.', function()
             limit_archives_size = 16,
         })
 
-        assert.equal(448, fs.statSync(privateArchivesDir).mode % 512)
+        if not require('fundo.utils').isWindows() then
+            assert.equal(448, fs.statSync(privateArchivesDir).mode % 512)
+        end
     end)
 
     it('fails setup when the configured archive path is not a directory.', function()
@@ -640,7 +683,7 @@ describe('fundo integration.', function()
         assert_history_restores_to({'one', 'two'})
     end)
 
-    it('keeps a buffer tracked when fallback archive transfer fails during detach.', function()
+    it('retries a failed fallback transfer after the wiped buffer is invalid.', function()
         local fs = require('fundo.fs')
         local copyFileSync = fs.copyFileSync
 
@@ -653,20 +696,17 @@ describe('fundo integration.', function()
         rawset(fs, 'copyFileSync', function()
             error('archive write failed')
         end)
-        local ok, err = manager:detach(bufnr)
+        vim.cmd('bwipeout!')
         rawset(fs, 'copyFileSync', copyFileSync)
 
-        assert.False(ok)
-        assert.truthy(tostring(err):match('archive write failed'))
-        local u = manager:get(bufnr)
-        assert(u, 'expected failed detach to leave the undo object available for retry')
-        assert.True(u.isDirty)
-
-        ok, err = manager:detach(bufnr)
-
-        assert(ok, err)
         assert.falsy(manager:get(bufnr))
-        vim.cmd('bwipeout!')
+        assert.False(api.nvim_buf_is_valid(bufnr))
+        assert.equal(1, vim.tbl_count(manager.pendingTransfers))
+
+        sync_all()
+
+        assert.equal(0, vim.tbl_count(manager.pendingTransfers))
+        assert.are_not.equal(0, #archives())
         fn.writefile({'external', 'change'}, file)
         vim.cmd('edit ' .. fn.fnameescape(file))
         assert.same({'external', 'change'}, buffer_lines())
@@ -746,6 +786,51 @@ describe('fundo integration.', function()
         assert.False(loaded)
         assert.False(u.isDirty)
         assert.same({'external', 'change'}, buffer_lines())
+    end)
+
+    it('replays fallback recovery once for a buffer shown in multiple windows.', function()
+        open_file_with_history({'one'}, {'one', 'two'})
+        local bufnr = api.nvim_get_current_buf()
+        local u = manager:get(bufnr)
+        api.nvim_buf_set_lines(bufnr, 0, -1, false, {'external', 'change'})
+        vim.cmd('vsplit')
+        local winids = api.nvim_list_wins()
+        api.nvim_win_set_cursor(winids[1], {1, 0})
+        api.nvim_win_set_cursor(winids[2], {2, 0})
+        local original = u.loadFileAndUndo
+        local calls = 0
+        u.loadFileAndUndo = function(self, winid)
+            calls = calls + 1
+            return original(self, winid)
+        end
+
+        local loaded, reason = u:loadFallBack()
+
+        u.loadFileAndUndo = original
+        assert(loaded, reason)
+        assert.equal(1, calls)
+        assert.same({1, 0}, api.nvim_win_get_cursor(winids[1]))
+        assert.same({2, 0}, api.nvim_win_get_cursor(winids[2]))
+    end)
+
+    it('completes VimLeave synchronization before the event returns.', function()
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        local u = manager:get(api.nvim_get_current_buf())
+        api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
+        vim.cmd('write')
+        local transferSync = u.transferSync
+        local completed = false
+        u.transferSync = function(self)
+            transferSync(self)
+            completed = true
+        end
+
+        event:emit('VimLeave')
+
+        u.transferSync = transferSync
+        assert.True(completed)
+        assert.False(u.isDirty)
     end)
 
     it('reports sync failures and keeps undo dirty.', function()
