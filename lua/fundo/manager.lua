@@ -14,6 +14,7 @@ local fs = require('fundo.fs')
 local log = require('fundo.lib.log')
 local path = require('fundo.fs.path')
 local mutex = require('fundo.lib.mutex')
+local manifest = require('fundo.manifest')
 
 local archiveDirMode = 448 -- 0o700
 
@@ -114,6 +115,21 @@ function Manager:scanArchivesDir()
                 records[name] = record
             end
         end
+        for _, record in pairs(records) do
+            if record.fallback then
+                local fallbackPath = path.join(self.archivesDir, record.fallback.name)
+                local manifestPath = manifest.path(fallbackPath)
+                local manifestStat = fs.statSync(manifestPath)
+                if manifestStat then
+                    record.manifest = {
+                        path = manifestPath,
+                        mtime = manifestStat.mtime.sec,
+                        size = manifestStat.size,
+                    }
+                    record.mtime = math.max(record.mtime or 0, manifestStat.mtime.sec)
+                end
+            end
+        end
         local stats = vim.tbl_values(records)
         table.sort(stats, function(a, b)
             return a.mtime > b.mtime
@@ -124,15 +140,19 @@ function Manager:scanArchivesDir()
         local removed = 0
         local function remove(stat)
             if stat then
-                local p = path.join(self.archivesDir, stat.name)
+                local p = stat.path or path.join(self.archivesDir, stat.name)
                 log.debug('archive will be pruned:', p, 'size:', stat.size)
                 tasks[p] = fs.unlink(p)
                 removed = removed + 1
             end
         end
+        local cutoff = self.retentionDays and os.time() - self.retentionDays * 24 * 60 * 60 or nil
         for _, record in ipairs(stats) do
-            if record.fallback and size + record.fallback.size <= limit then
-                size = size + record.fallback.size
+            local essentialSize = record.fallback and record.fallback.size or 0
+            essentialSize = essentialSize + (record.manifest and record.manifest.size or 0)
+            local expired = cutoff and record.mtime < cutoff
+            if not expired and record.fallback and size + essentialSize <= limit then
+                size = size + essentialSize
                 if record.baseline and size + record.baseline.size <= limit then
                     size = size + record.baseline.size
                 else
@@ -141,6 +161,7 @@ function Manager:scanArchivesDir()
             else
                 remove(record.fallback)
                 remove(record.baseline)
+                remove(record.manifest)
             end
         end
         local results = await(promise.allSettled(tasks))
@@ -260,6 +281,7 @@ function Manager:initialize()
     end
     self.archivesDir = path.normalize(config.archives_dir)
     self.limitArchivesSize = config.limit_archives_size
+    self.retentionDays = config.retention_days
     fs.mkdirpSync(self.archivesDir, archiveDirMode)
     if not utils.isWindows() then
         fs.chmodSync(self.archivesDir, archiveDirMode)
@@ -270,7 +292,8 @@ function Manager:initialize()
     self.mutex = mutex:new()
     self.disposables = {}
     self.initialized = true
-    log.info('manager initialized:', 'archives_dir:', self.archivesDir, 'limit_mb:', self.limitArchivesSize)
+    log.info('manager initialized:', 'archives_dir:', self.archivesDir, 'limit_mb:', self.limitArchivesSize,
+        'retention_days:', self.retentionDays or 'none')
     table.insert(self.disposables, disposable:create(function()
         log.debug('disposing manager:', 'attached_buffers:', vim.tbl_count(self.undos))
         for _, b in pairs(self.undos) do

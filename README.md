@@ -9,7 +9,9 @@ The goal of nvim-fundo is to make Neovim's undo file become stable and useful.
 ## Features
 
 - Restore undo history even if the file's content has been changed outside Neovim
-- Limit size for archives
+- Validate archive records with versioned metadata
+- Inspect preservation health with `:FundoStatus` and `:FundoDoctor`
+- Limit archive size, baseline size, retention age, and selected files
 
 ### TODO Features
 
@@ -47,6 +49,11 @@ require('fundo').setup()
 
 Use undo file as usual.
 
+- `:FundoStatus [path]` shows the native undo, fallback, baseline, and manifest
+  state for the current buffer or an optional path.
+- `:FundoDoctor` checks archive permissions, usage, metadata, and orphaned
+  artifacts.
+
 ## Documentation
 
 `:h fundo` includes the default configuration, behavior notes, and troubleshooting
@@ -81,11 +88,18 @@ Fundo handles the common external-change cases:
   Fundo does not replace it with external contents;
 - external overwrites, appends, and truncates are handled as file-content changes.
 
-The fallback archives and baseline snapshots use disk space. `limit_archives_size`
-caps the archive directory size in MB; when the limit is exceeded, older archives
-are pruned by modified time. The same option is also the maximum individual file
-size Fundo will copy as a baseline snapshot. Oversized files are skipped, and an
-existing baseline is removed when the current file no longer fits the limit.
+Each successfully persisted fallback record has a versioned manifest in the
+private `.metadata` archive subdirectory. The manifest records the source,
+native undo, fallback, and optional baseline identity so Fundo can validate and
+diagnose the record. Existing archives without a manifest remain usable and are
+reported as legacy records until Fundo next persists them.
+
+The fallback archives, manifests, and baseline snapshots use disk space.
+`limit_archives_size` caps their total size in MB. `baseline_max_file_size`
+independently limits one baseline snapshot, and `retention_days` optionally
+expires complete records by age. A `filter` callback can exclude paths from
+tracking. Pruning removes an expired or over-budget record together with its
+metadata.
 
 File moves are still listed as a TODO feature. Today, Fundo tracks the path that
 Neovim reports for a buffer and can follow paths changed with `:saveas`, but it
@@ -112,6 +126,19 @@ The upstream BSD-3-Clause license is included in [LICENSE.promise-async](./LICEN
         description = [[Limit the archives directory size, unit is MB(megabyte), elder files will be
         removed based on their modified time]],
         default = 512
+    },
+    baseline_max_file_size = {
+        description = [[Maximum baseline snapshot size in MB. When omitted, it follows
+        limit_archives_size.]],
+        default = 512
+    },
+    retention_days = {
+        description = [[Optional maximum archive record age in days.]],
+        default = nil
+    },
+    filter = {
+        description = [[Return true to track a path and false to exclude it.]],
+        default = function(path, bufnr) return true end
     },
     logging = {
         description = [[Logging configuration. Disabled by default. When enabled, Fundo writes

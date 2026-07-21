@@ -509,13 +509,134 @@ describe('fundo integration.', function()
         end)
     end)
 
-    it('prunes the oldest archives when the size limit is exceeded.', function()
-        local file_a = path.join(tmpdir, 'a.txt')
-        local file_b = path.join(tmpdir, 'b.txt')
+    it('writes a versioned manifest and reports healthy status.', function()
+        local manifest = require('fundo.manifest')
+        local fs = require('fundo.fs')
+
+        open_file_with_history({'one'}, {'one', 'two'})
+
+        local fallback = path.join(archivesDir, path.basename(fn.undofile(file)))
+        local manifestPath = manifest.path(fallback)
+        local value, err = manifest.read(manifestPath, fallback)
+        assert(value, err)
+        assert.equal(1, value.version)
+        assert.equal(path.normalize(file), value.source.path)
+        assert.equal(path.normalize(fallback), value.fallback.path)
+        assert.equal('file', fs.statSync(manifestPath).type)
+        if not require('fundo.utils').isWindows() then
+            assert.equal(384, fs.statSync(manifestPath).mode % 512)
+        end
+
+        local status = require('fundo').status(file)
+        assert.equal('healthy', status.state)
+        assert.equal(1, status.manifest_version)
+        assert.True(status.fallback.exists)
+        assert.True(status.manifest.exists)
+
+        local doctor = require('fundo').doctor()
+        assert.True(doctor.ok)
+        assert.equal(1, doctor.records)
+        assert.equal(0, doctor.legacy_records)
+
+        local diagnostics = require('fundo.diagnostics')
+        assert.equal(2, fn.exists(':FundoStatus'))
+        assert.equal(2, fn.exists(':FundoDoctor'))
+        assert.truthy(diagnostics.formatStatus(status):match('state: healthy'))
+        assert.truthy(diagnostics.formatDoctor(doctor):match('Fundo doctor: OK'))
+    end)
+
+    it('reports corrupted manifests without changing an otherwise valid archive.', function()
+        local manifest = require('fundo.manifest')
+
+        open_file_with_history({'one'}, {'one', 'two'})
+        local fallback = path.join(archivesDir, path.basename(fn.undofile(file)))
+        fn.writefile({'not json'}, manifest.path(fallback))
+
+        local status = require('fundo').status(file)
+        assert.equal('invalid-manifest', status.state)
+        assert.truthy(status.manifest_error)
+
+        local doctor = require('fundo').doctor()
+        assert.False(doctor.ok)
+        assert.equal('invalid-manifest', doctor.issues[1].code)
+        assert.equal('file', fn.getftype(fallback))
+    end)
+
+    it('uses an independent maximum size for baseline snapshots.', function()
+        local manifest = require('fundo.manifest')
 
         require('fundo').setup({
             archives_dir = archivesDir,
-            limit_archives_size = 0.00004,
+            limit_archives_size = 16,
+            baseline_max_file_size = 0,
+        })
+        open_file_with_history({'one'}, {'one', 'two'})
+
+        local fallback = path.join(archivesDir, path.basename(fn.undofile(file)))
+        local value, err = manifest.read(manifest.path(fallback), fallback)
+        assert(value, err)
+        assert.equal('file', fn.getftype(fallback))
+        assert.equal('', fn.getftype(fallback .. '.base'))
+        assert.Nil(value.baseline)
+    end)
+
+    it('does not track files rejected by the configured filter.', function()
+        require('fundo').setup({
+            archives_dir = archivesDir,
+            limit_archives_size = 16,
+            filter = function(name)
+                return path.normalize(name) ~= path.normalize(file)
+            end,
+        })
+
+        fn.writefile({'one'}, file)
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        edit_and_write({'one', 'two'})
+
+        assert.Nil(manager:get(api.nvim_get_current_buf()))
+        assert.same({}, archives())
+        local status = require('fundo').status(file)
+        assert.equal('filtered', status.state)
+        assert.False(status.selected)
+    end)
+
+    it('prunes complete records after their retention period.', function()
+        local manifest = require('fundo.manifest')
+        local fs = require('fundo.fs')
+
+        require('fundo').setup({
+            archives_dir = archivesDir,
+            limit_archives_size = 16,
+            retention_days = 1,
+        })
+        open_file_with_history({'one'}, {'one', 'two'})
+
+        local fallback = path.join(archivesDir, path.basename(fn.undofile(file)))
+        local recordPaths = {fallback, fallback .. '.base', manifest.path(fallback)}
+        for _, recordPath in ipairs(recordPaths) do
+            uv.fs_utime(recordPath, 100, 100)
+        end
+
+        async(function()
+            await(manager:scanArchivesDir())
+            done()
+        end)
+        assert.True(wait())
+
+        for _, recordPath in ipairs(recordPaths) do
+            assert.Nil(fs.statSync(recordPath))
+        end
+    end)
+
+    it('prunes the oldest archive record when the size limit is exceeded.', function()
+        local file_a = path.join(tmpdir, 'a.txt')
+        local file_b = path.join(tmpdir, 'b.txt')
+        local manifest = require('fundo.manifest')
+        local fs = require('fundo.fs')
+
+        require('fundo').setup({
+            archives_dir = archivesDir,
+            limit_archives_size = 16,
         })
 
         fn.writefile({'aaaaaaaaaaaaaaaaaaaa'}, file_a)
@@ -530,12 +651,22 @@ describe('fundo integration.', function()
         vim.cmd('write')
         vim.cmd('bwipeout!')
 
-        local archives = fn.glob(path.join(archivesDir, '*'), false, true)
-        assert.equal(4, #archives)
-
-        for i, archive in ipairs(archives) do
-            uv.fs_utime(archive, 100 * i, 100 * i)
+        local function touchRecord(currentFile, timestamp)
+            local fallback = path.join(archivesDir, path.basename(fn.undofile(currentFile)))
+            local recordPaths = {fallback, fallback .. '.base', manifest.path(fallback)}
+            local size = 0
+            for _, recordPath in ipairs(recordPaths) do
+                local stat = fs.statSync(recordPath)
+                assert(stat, 'expected record artifact: ' .. recordPath)
+                size = size + stat.size
+                uv.fs_utime(recordPath, timestamp, timestamp)
+            end
+            return fallback, recordPaths, size
         end
+
+        local _, recordA = touchRecord(file_a, 100)
+        local fallbackB, recordB, sizeB = touchRecord(file_b, 200)
+        manager.limitArchivesSize = (sizeB + 1) / 1024 / 1024
 
         async(function()
             await(manager:scanArchivesDir())
@@ -543,11 +674,12 @@ describe('fundo integration.', function()
         end)
         assert.True(wait())
 
-        local remaining = fn.glob(path.join(archivesDir, '*'), false, true)
-        assert.equal(1, #remaining)
-        local expectedFallback = path.join(archivesDir, path.basename(fn.undofile(file_b)))
-        assert.equal(expectedFallback, remaining[1])
-        assert.False(remaining[1]:sub(-5) == '.base')
+        for _, recordPath in ipairs(recordA) do
+            assert.Nil(fs.statSync(recordPath))
+        end
+        for _, recordPath in ipairs(recordB) do
+            assert(fs.statSync(recordPath), 'expected newest record to be kept: ' .. fallbackB)
+        end
     end)
 
     it('runs an overdue idle prune and retries after a scan failure.', function()

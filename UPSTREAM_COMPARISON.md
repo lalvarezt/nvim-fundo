@@ -15,12 +15,13 @@ Neovim is closed.
 
 ## High-level diff
 
-The current branch changes 31 files relative to `upstream/main`:
+The current branch changes 35 files relative to `upstream/main`:
 
 - Adds vendored `promise-async` runtime files and license.
 - Changes setup/config reload behavior.
 - Adds new autocmd handling for `BufUnload` and `FileChangedShellPost`.
 - Changes undo archive transfer, fallback repair, and baseline snapshot semantics.
+- Adds versioned archive manifests, status/doctor diagnostics, and storage policies.
 - Hardens file-copy, archive-pruning, path-normalization, and event-emission helpers.
 - Adds integration, subprocess, and utility tests.
 
@@ -172,7 +173,8 @@ to create one normal native undo step from baseline contents to current contents
 with a baseline-only step.
 - Baseline snapshots are advanced after successful native undo/fallback persistence.
 - Oversized current files remove stale baselines instead of keeping an unsafe prior snapshot.
-- `limit_archives_size` now also gates individual baseline snapshot creation, not only total archive pruning.
+- `baseline_max_file_size` independently gates individual baseline snapshot creation while defaulting to the total
+archive limit for compatibility.
 
 Why it exists:
 
@@ -224,6 +226,39 @@ Why it exists:
 - Synchronous transfer needs synchronous copy support.
 - Pruning should not break preservation because one stale archive cannot be removed.
 
+### Versioned manifests, diagnostics, and storage policies
+
+Files:
+
+- `lua/fundo/manifest.lua`
+- `lua/fundo/diagnostics.lua`
+- `lua/fundo/config.lua`
+- `lua/fundo/main.lua`
+- `lua/fundo/manager.lua`
+- `lua/fundo/model/undo.lua`
+- `lua/fundo/fs/init.lua`
+- `spec/config_spec.lua`
+- `spec/fundo_spec.lua`
+- `README.md`
+- `doc/fundo.txt`
+
+What changed:
+
+- Successful transfers atomically write a schema-versioned, owner-only manifest under `archives_dir/.metadata`.
+- `:FundoStatus [path]` and `require('fundo').status()` report per-file preservation state.
+- `:FundoDoctor` and `require('fundo').doctor()` report archive usage, permissions, invalid manifests, legacy records,
+orphaned artifacts, expiry, tracked buffers, and pending transfers.
+- `baseline_max_file_size` separates individual baseline limits from the total archive budget.
+- `retention_days` expires complete records, and `filter(path, bufnr)` lets users exclude files from tracking.
+- Size and age pruning account for a record's fallback, baseline, and manifest together.
+
+Why it exists:
+
+- A durable manifest makes archive identity and format evolution explicit instead of relying only on filenames.
+- Preservation failures and incomplete records need a user-visible diagnostic path even when file logging is disabled.
+- Total storage, individual baseline size, record age, and file selection are distinct policy decisions.
+- Versioned metadata is the necessary foundation for future safe external rename recovery.
+
 ### Path normalization fixes
 
 Files:
@@ -263,7 +298,7 @@ Why it exists:
 | Closed branch history                    | covered, strengthened in this pass | Existing branch overwrite coverage remains; external append was added and verifies undo/redo branch shape.                                                                                                                                              |
 | Closed multi-external                    | added in this pass                 | Multiple external overwrites while closed reopen to the final version and undo to the prior internal state.                                                                                                                                             |
 | Closed clean first-open                  | added in this pass                 | A file opened and closed without edits gets a baseline snapshot; a later external edit reopens at current contents, native `undo` returns to the baseline, and `redo` returns to current.                                                               |
-| Baseline advancement and size limits     | added in this pass                 | Baselines advance after repaired state is persisted, are skipped for oversized files, and are removed when a current file no longer fits `limit_archives_size`.                                                                                         |
+| Baseline advancement and size limits     | added in this pass                 | Baselines advance after repaired state is persisted, are skipped for oversized files, and are removed when a current file no longer fits `baseline_max_file_size`.                                                                                       |
 | Missing native undo                      | covered, clarified in this pass    | With native undo missing, baseline recovery creates one native undo step back to the last baseline snapshot.                                                                                                                                            |
 | Missing fallback archive                 | covered, clarified in this pass    | If the file is unchanged, `shouldTransfer()` recreates the fallback archive from native undo. After an external edit with the fallback missing but native undo present, recovery fails safely rather than degrading to baseline-only history.           |
 | Corrupted/stale fallback archive         | added in this pass                 | A stale fallback archive is not accepted as a successful repair to unrelated stale content. Corrupted native undo on reopen still fails visibly before Fundo can repair.                                                                                |
@@ -320,11 +355,13 @@ Current verification:
 | `lua/promise.lua`               | Vendored promise runtime.                                                                         |
 | `lua/promise-async/*`           | Vendored compatibility/runtime support.                                                           |
 | `lua/fundo.lua`                 | Reloads config and restarts plugin on repeated setup.                                             |
-| `lua/fundo/config.lua`          | Mutates module config table on reload.                                                            |
-| `lua/fundo/main.lua`            | Adds unload and file-change events to the preservation lifecycle.                                 |
-| `lua/fundo/manager.lua`         | Attaches loaded buffers, persists on detach, reports transfer failures, prunes archives robustly. |
-| `lua/fundo/model/undo.lua`      | Implements fallback archive repair, baseline snapshots, atomic transfer, and failure semantics.   |
-| `lua/fundo/fs/init.lua`         | Adds atomic copy helpers, sync copy, and mkdirp support needed by persistence.                    |
+| `lua/fundo/config.lua`          | Reloads config and validates logging, retention, baseline-size, and file-selection policies.       |
+| `lua/fundo/diagnostics.lua`     | Implements structured status and archive-wide health reports.                                     |
+| `lua/fundo/main.lua`            | Adds unload/file-change events and status/doctor commands.                                         |
+| `lua/fundo/manager.lua`         | Attaches loaded buffers, persists on detach, reports failures, and prunes complete records.        |
+| `lua/fundo/manifest.lua`        | Reads, validates, and atomically writes versioned archive metadata.                                |
+| `lua/fundo/model/undo.lua`      | Implements repair, baselines, filtered tracking, manifests, atomic transfer, and failure semantics.|
+| `lua/fundo/fs/init.lua`         | Adds atomic copy/write helpers, sync copy, and mkdirp support needed by persistence.                |
 | `lua/fundo/fs/path.lua`         | Normalizes archive paths predictably across edge cases.                                           |
 | `lua/fundo/lib/debounce.lua`    | Uses local uv-handle annotations so timer lifecycle code remains type-checkable.                  |
 | `lua/fundo/lib/event.lua`       | Makes event iteration robust; conditional keep due to swallowed errors.                           |
@@ -362,7 +399,7 @@ Changes made:
 path.
 - Added baseline bridge behavior for clean first-opened files whose external edits happen while Neovim is closed.
 - Advanced baselines after successful native undo/fallback transfer and removed stale baselines when current files
-exceed `limit_archives_size`.
+exceed `baseline_max_file_size`.
 - Added closed-session tests for baseline undo/redo, baseline advancement, unchanged files, size-limit skip, small-file
 baseline use, and stale-baseline removal.
 - Updated README and Vim help to document native undo, fallback archives, baseline snapshots, and size-limit semantics.

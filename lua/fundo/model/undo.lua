@@ -10,6 +10,7 @@ local fs = require('fundo.fs')
 local utils = require('fundo.utils')
 local log = require('fundo.lib.log')
 local config = require('fundo.config')
+local manifest = require('fundo.manifest')
 
 local archiveDirMode = 448 -- 0o700
 
@@ -41,13 +42,26 @@ end
 function Undo:attach()
     local bt = vim.bo[self.bufnr].bt
     local name = api.nvim_buf_get_name(self.bufnr)
-    if path.dirname(name) == self.dir then
+    if path.dirname(name) == self.dir or manifest.isPath(name, self.dir) then
         log.debug('attach disabled undofile for archive buffer:', self.bufnr, name)
         vim.bo[self.bufnr].undofile = false
     end
     if isLogFile(name) then
         self.attached = false
         log.trace('undo attach skipped; Fundo log file:', self.bufnr, name)
+        return self.attached
+    end
+    local filterOk, selected = pcall(config.filter, name, self.bufnr)
+    if not filterOk then
+        self.attached = false
+        self.filterError = tostring(selected)
+        pcall(log.warn, 'undo attach filter failed:', self.bufnr, name, selected)
+        return self.attached
+    end
+    self.selected = selected == true
+    if not self.selected then
+        self.attached = false
+        log.trace('undo attach skipped; rejected by filter:', self.bufnr, name)
         return self.attached
     end
     self.attached = (bt == '' or bt == 'acwrite') and vim.bo[self.bufnr].undofile
@@ -146,7 +160,7 @@ function Undo:saveUndoAsync()
 end
 
 function Undo:baselineLimitBytes()
-    return config.limit_archives_size * 1024 * 1024
+    return config.baseline_max_file_size * 1024 * 1024
 end
 
 function Undo:canSaveBaseline(stat)
@@ -202,7 +216,7 @@ end
 
 local function saveBaselineSnapshot(transfer)
     local stat = fs.statSync(transfer.name)
-    local limit = config.limit_archives_size * 1024 * 1024
+    local limit = config.baseline_max_file_size * 1024 * 1024
     if limit <= 0 or not stat or (stat.type and stat.type ~= 'file')
         or type(stat.size) ~= 'number' or stat.size > limit then
         pcall(fs.unlinkSync, transfer.baselinePath)
@@ -223,6 +237,7 @@ function Undo.completePendingTransferSync(transfer)
     fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
     fs.copyFileSync(transfer.name, transfer.fallbackPath)
     saveBaselineSnapshot(transfer)
+    manifest.write(transfer)
 end
 
 function Undo.completePendingTransfer(transfer)
@@ -234,6 +249,7 @@ function Undo.completePendingTransfer(transfer)
         fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
         await(fs.copyFile(transfer.name, transfer.fallbackPath))
         saveBaselineSnapshot(transfer)
+        manifest.write(transfer)
     end)
 end
 
@@ -404,6 +420,8 @@ function Undo:loadFallBack()
         -- undo tree. Persist that repaired pair before another external edit can
         -- make the native undo file invalid again.
         self.isDirty = self.undoPath ~= '' and vim.bo[self.bufnr].undolevels ~= 0
+        self.lastAction = 'recovered-fallback'
+        self.lastUpdated = os.time()
         if reason then
             log.debug('loaded fallback archive:', self.fallbackPath, 'reason:', reason)
         else
@@ -429,7 +447,19 @@ function Undo:shouldTransfer()
         return logTransferDecision(self, not self:isEmpty(), 'native-undo-missing')
     end
     if fs.statSync(self.fallbackPath) then
-        return logTransferDecision(self, false, 'fallback-exists')
+        local manifestPath = manifest.path(self.fallbackPath)
+        local inFastEvent = type(vim.in_fast_event) == 'function' and vim.in_fast_event()
+        if inFastEvent and fs.statSync(manifestPath) then
+            return logTransferDecision(self, false, 'fallback-and-manifest-exist-fast-event')
+        end
+        local _, manifestErr = manifest.read(manifestPath, self.fallbackPath)
+        if not manifestErr then
+            return logTransferDecision(self, false, 'fallback-exists')
+        end
+        if inFastEvent then
+            return logTransferDecision(self, true, 'manifest-missing-or-invalid-fast-event')
+        end
+        return logTransferDecision(self, not self:isEmpty(), 'manifest-missing-or-invalid')
     end
     -- If the archive is missing but Neovim successfully loaded a native undo
     -- tree, save the matching file contents. Avoid inspecting the undo list in
@@ -457,6 +487,8 @@ function Undo:transfer()
         await(Undo.completePendingTransfer(transfer))
         self.pendingTransfer = nil
         self.isDirty = false
+        self.lastAction = 'transferred'
+        self.lastUpdated = os.time()
         log.debug('transfer completed:', self.bufnr, transfer.name, 'fallback:', transfer.fallbackPath)
     end)
 end
@@ -477,6 +509,8 @@ function Undo:transferSync()
     Undo.completePendingTransferSync(transfer)
     self.pendingTransfer = nil
     self.isDirty = false
+    self.lastAction = 'transferred'
+    self.lastUpdated = os.time()
     log.debug('transferSync completed:', self.bufnr, transfer.name, 'fallback:', transfer.fallbackPath)
 end
 
@@ -500,6 +534,8 @@ function Undo:check()
         return
     end
     if self:loadBaseline() then
+        self.lastAction = 'recovered-baseline'
+        self.lastUpdated = os.time()
         log.debug('check completed; baseline loaded:', self.bufnr, self.name or '')
         return
     end
