@@ -40,6 +40,15 @@ local function createCommand()
         com! FundoEnable lua require('fundo').enable()
         com! FundoDisable lua require('fundo').disable()
     ]])
+    api.nvim_create_user_command('FundoStatus', function(opts)
+        local diagnostics = require('fundo.diagnostics')
+        local target = opts.args ~= '' and opts.args or nil
+        print(diagnostics.formatStatus(require('fundo').status(target)))
+    end, {nargs = '?', complete = 'file', force = true})
+    api.nvim_create_user_command('FundoDoctor', function()
+        local diagnostics = require('fundo.diagnostics')
+        print(diagnostics.formatDoctor(require('fundo').doctor()))
+    end, {force = true})
 end
 
 function M.enable()

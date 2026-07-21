@@ -45,6 +45,9 @@ Default configuration:                                 *nvim-fundo-default-confi
     {
         archives_dir = vim.fn.stdpath('cache') .. path.separator .. 'fundo',
         limit_archives_size = 512,
+        baseline_max_file_size = 512,
+        retention_days = nil,
+        filter = function(path, bufnr) return true end,
         logging = {
             enabled = false,
             level = 'warn',
@@ -61,8 +64,25 @@ Default configuration:                                 *nvim-fundo-default-confi
                                                         *fundo-limit_archives_size*
 `limit_archives_size`~
         Maximum archive directory size in MB. When the size is exceeded, older
-        archives are pruned by modified time. This value is also the maximum
-        individual file size Fundo will copy as a baseline snapshot.
+        archive records are pruned by modified time. Fallbacks, baselines, and
+        manifests all count toward this limit.
+
+                                                *fundo-baseline_max_file_size*
+`baseline_max_file_size`~
+        Maximum individual baseline snapshot size in MB. When omitted, this
+        follows `limit_archives_size` for compatibility with older setups.
+
+                                                        *fundo-retention_days*
+`retention_days`~
+        Optional maximum archive record age in days. Defaults to `nil`, which
+        disables age-based expiry. Expired fallback, baseline, and manifest
+        artifacts are pruned together.
+
+                                                                *fundo-filter*
+`filter(path, bufnr)`~
+        Callback that returns `true` when Fundo should track a file. Defaults to
+        accepting every otherwise supported buffer. Returning `false` excludes
+        the file from fallback archives and baseline snapshots.
 
                                                         *fundo-logging*
 `logging`~
@@ -90,6 +110,9 @@ UNDO PRESERVATION                                             *fundo-behavior*
 Fundo preserves undo history by keeping Neovim's native undo file and Fundo's
 fallback archive in sync. Both artifacts are treated as a pair. A separate
 baseline snapshot is used only when no usable native undo file is available.
+Successful transfers also write a versioned manifest under
+`archives_dir/.metadata`. Missing manifests from earlier Fundo versions do not
+prevent recovery; diagnostics report those records as legacy.
 
 Supported external-change cases:
 
@@ -132,15 +155,15 @@ No undo history after an external change~
         archive is missing while a native undo file exists, Fundo fails safely
         instead of replacing that history with a baseline-only step. If no usable
         native undo file is available, a baseline snapshot can provide one native
-        undo step when the file fits `limit_archives_size`. A corrupted native
-        undo file may still make Neovim abort the edit before Fundo can repair
-        the buffer.
+        undo step when the file fits `baseline_max_file_size`. A corrupted
+        native undo file may still make Neovim abort the edit before Fundo can
+        repair the buffer. Use `:FundoStatus` for the current file and
+        `:FundoDoctor` for archive-wide diagnostics.
 
 Archive directory uses disk space~
         This is expected. Lower `limit_archives_size` to prune old fallback
-        archives and baseline snapshots more aggressively. Files larger than the
-        limit are skipped for baseline snapshots, and stale baselines are removed
-        when the current file no longer fits.
+        records more aggressively, set `retention_days`, or use
+        `baseline_max_file_size` and `filter` to limit what is stored.
 
 Archive directory was deleted~
         Fundo recreates the configured archive directory when syncing undo state.
@@ -164,5 +187,16 @@ API                                                                 *fundo-api*
                                                         *fundo.disable()*
 `require('fundo').disable()`~
         Disable Fundo and dispose its event handlers.
+
+                                                        *fundo.status()*
+`require('fundo').status({target})`~
+        Return structured preservation status for the current buffer, a buffer
+        number, or a file path. `:FundoStatus [path]` prints the same information.
+
+                                                        *fundo.doctor()*
+`require('fundo').doctor()`~
+        Return an archive-wide health report. `:FundoDoctor` prints the report,
+        including usage, legacy and expired records, pending transfers, invalid
+        manifests, orphaned artifacts, and permission problems.
 
 vim:tw=78:ts=8:ft=help:norl:

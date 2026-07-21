@@ -10,6 +10,19 @@ function M.disable()
     require('fundo.main').disable()
 end
 
+---Return preservation status for the current buffer, a buffer number, or a path.
+---@param target? number|string
+---@return table
+function M.status(target)
+    return require('fundo.diagnostics').status(target)
+end
+
+---Inspect the archive directory and return a health report.
+---@return table
+function M.doctor()
+    return require('fundo.diagnostics').doctor()
+end
+
 ---Setup configuration and enable fundo
 ---@param opts? FundoConfig
 function M.setup(opts)
@@ -28,6 +41,8 @@ function M.setup(opts)
     log.debug('setup effective config:', {
         archives_dir = config.archives_dir,
         limit_archives_size = config.limit_archives_size,
+        baseline_max_file_size = config.baseline_max_file_size,
+        retention_days = config.retention_days,
         logging = config.logging
     })
     log.info('setup complete')

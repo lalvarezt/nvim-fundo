@@ -39,6 +39,36 @@ function FS.copyFileSync(path, newPath)
     end
 end
 
+function FS.writeFileSync(target, data, mode)
+    local p = tempPath(target)
+    local fd, err = uv.fs_open(p, 'w', mode or 384)
+    if not fd then
+        error(err)
+    end
+
+    local ok, writeErr = pcall(function()
+        local offset = 0
+        while offset < #data do
+            local written, currentErr = uv.fs_write(fd, data:sub(offset + 1), offset)
+            if not written then
+                error(currentErr)
+            end
+            offset = offset + written
+        end
+    end)
+    local closeOk, closeErr = uv.fs_close(fd)
+    if not ok or not closeOk then
+        pcall(uv.fs_unlink, p)
+        error(writeErr or closeErr)
+    end
+
+    local renamed, renameErr = uv.fs_rename(p, target)
+    if not renamed then
+        pcall(uv.fs_unlink, p)
+        error(renameErr)
+    end
+end
+
 function FS.mkdirpSync(dirpath, mode)
     local target = dirpath
     local normalized = path.normalize(target)
