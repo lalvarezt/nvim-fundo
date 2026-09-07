@@ -212,11 +212,14 @@ API                                                                 *fundo-api*
 `require('fundo').status({target})`~
         Return structured preservation status for the current buffer, a buffer
         number, or a file path. `:FundoStatus [path]` prints the same information.
+        Path status includes pending transfers after the buffer closes.
 
                                                         *fundo.doctor()*
 `require('fundo').doctor()`~
         Return an archive-wide health report. `:FundoDoctor` prints the report,
         including usage, legacy and expired records, pending transfers, invalid
         manifests, orphaned artifacts, and permission problems.
+        Pending transfers make `ok` false until saved. The count includes open
+        buffers and detached retries, counting each archive once.
 
 vim:tw=78:ts=8:ft=help:norl:

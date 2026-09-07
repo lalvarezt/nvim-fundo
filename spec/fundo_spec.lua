@@ -333,6 +333,47 @@ describe('fundo integration.', function()
         end)
     end
 
+    for _, state in ipairs({'attached', 'detached', 'both queues'}) do
+        it('reports pending recovery data in ' .. state .. ' until retry succeeds.', function()
+            local fs = require('fundo.fs')
+            open_file_with_history({'one'}, {'two'})
+            edit_and_write({'three'})
+            local u = manager:get(api.nvim_get_current_buf())
+            local originalWrite = fs.writeFileSync
+            rawset(fs, 'writeFileSync', function() error('injected write failure') end)
+            local ok
+            if state == 'detached' then
+                ok = pcall(vim.cmd, 'bwipeout!')
+            else
+                ok = pcall(u.transferSync, u)
+            end
+            rawset(fs, 'writeFileSync', originalWrite)
+            assert.equal(state == 'detached', ok)
+            if state == 'both queues' then
+                manager.pendingTransfers[u.fallbackPath] = u.pendingTransfer
+            end
+
+            local fundo = require('fundo')
+            local status = fundo.status(file)
+            assert.True(status.pending)
+            assert.equal('pending-transfer', status.state)
+            assert.equal(state ~= 'detached', status.tracked)
+            local doctor = fundo.doctor()
+            assert.False(doctor.ok)
+            assert.equal(1, doctor.pending_transfers)
+            assert.equal('pending-transfer', doctor.issues[1].code)
+            assert.same({'two'}, fn.readfile(u.fallbackPath))
+
+            sync_all()
+
+            assert.False(fundo.status(file).pending)
+            assert.equal('healthy', fundo.status(file).state)
+            assert.True(fundo.doctor().ok)
+            assert.equal(0, fundo.doctor().pending_transfers)
+            assert.same({'three'}, fn.readfile(u.fallbackPath))
+        end)
+    end
+
     it('retries a detached snapshot after the source has disappeared.', function()
         local fs = require('fundo.fs')
         local writeFileSync = fs.writeFileSync

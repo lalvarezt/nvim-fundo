@@ -99,6 +99,11 @@ last write. Failed transfers retain both snapshots for retry after buffer unload
 A newer transfer takes precedence over an older pending snapshot for that path.
 Synchronization does not write or recreate the source file.
 
+`:FundoStatus [path]` reports pending transfers even after the buffer closes.
+`:FundoDoctor` reports an issue while transfers remain pending, counting each
+archive once across open buffers and detached retries. A successful retry clears
+the pending state.
+
 New snapshots store Neovim buffer text independently of the source file's
 encoding and line endings. A clean file with no undo history can have a usable
 baseline without a fallback; `:FundoStatus` reports this as `baseline-only`.

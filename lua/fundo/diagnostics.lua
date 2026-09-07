@@ -60,6 +60,8 @@ function M.status(target)
         and require('fundo.model.undo').archivePath(name, undoPath, config.archives_dir) or ''
     local baselinePath = fallbackPath ~= '' and fallbackPath .. '.base' or ''
     local manifestPath = fallbackPath ~= '' and manifest.path(fallbackPath) or ''
+    local pending = (tracked and tracked.pendingTransfer ~= nil)
+        or (manager.pendingTransfers and manager.pendingTransfers[fallbackPath] ~= nil) or false
     local manifestValue, manifestError
     if manifestPath ~= '' then
         manifestValue, manifestError = manifest.read(manifestPath, fallbackPath)
@@ -72,7 +74,7 @@ function M.status(target)
         state = 'filter-error'
     elseif not selected then
         state = 'filtered'
-    elseif tracked and tracked.pendingTransfer then
+    elseif pending then
         state = 'pending-transfer'
     elseif tracked and tracked.isDirty then
         state = 'dirty'
@@ -95,7 +97,7 @@ function M.status(target)
         filter_error = filterError,
         tracked = tracked ~= nil,
         dirty = tracked and tracked.isDirty == true or false,
-        pending = tracked and tracked.pendingTransfer ~= nil or false,
+        pending = pending,
         last_action = tracked and tracked.lastAction or nil,
         last_updated = tracked and tracked.lastUpdated or nil,
         state = state,
@@ -207,6 +209,20 @@ function M.doctor()
         issue('archive-size', 'archive usage exceeds the configured limit')
     end
 
+    local pendingPaths = {}
+    for key in pairs(manager.pendingTransfers or {}) do
+        pendingPaths[key] = true
+    end
+    for _, tracked in pairs(manager.undos or {}) do
+        if tracked.pendingTransfer then
+            pendingPaths[tracked.pendingTransfer.fallbackPath] = true
+        end
+    end
+    local pendingCount = vim.tbl_count(pendingPaths)
+    if pendingCount > 0 then
+        issue('pending-transfer', ('%d archive transfers are waiting to be saved'):format(pendingCount))
+    end
+
     return {
         ok = #issues == 0,
         archive_dir = config.archives_dir,
@@ -216,7 +232,7 @@ function M.doctor()
         legacy_records = legacy,
         expired_records = expired,
         tracked_buffers = manager.undos and vim.tbl_count(manager.undos) or 0,
-        pending_transfers = manager.pendingTransfers and vim.tbl_count(manager.pendingTransfers) or 0,
+        pending_transfers = pendingCount,
         issues = issues,
     }
 end
