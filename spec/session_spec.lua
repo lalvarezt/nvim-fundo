@@ -60,10 +60,22 @@ describe('closed Neovim sessions.', function()
             assert(vim.wait(1000, function() return #notices == 1 end, 10))
             assert(notices[1].level == vim.log.levels.ERROR)
             assert(notices[1].message:find('command write failure', 1, true))
+            local failure = require('fundo').status().last_error
+            assert(failure.stage == 'fallback')
+            assert(type(failure.time) == 'number')
+            local statusOutput = vim.api.nvim_exec('FundoStatus', true)
+            assert(statusOutput:find('last error [fallback]', 1, true))
+            assert(statusOutput:find('command write failure', 1, true))
+            assert(statusOutput:find('failed at:', 1, true))
+            local doctorOutput = vim.api.nvim_exec('FundoDoctor', true)
+            assert(doctorOutput:find('transfer-error', 1, true))
+            assert(doctorOutput:find('command write failure', 1, true))
             fs.writeFileSync = original
             vim.cmd('FundoSync')
             assert(vim.wait(1000, function() return #notices == 2 end, 10))
             assert(notices[2].level == vim.log.levels.INFO)
+            assert(require('fundo').status().last_error == nil)
+            assert(require('fundo').doctor().ok)
             WriteReport({
                 'message=' .. notices[2].message,
                 'state=' .. require('fundo').status().state,

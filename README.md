@@ -110,6 +110,14 @@ reports completion or failure. `require('fundo').sync()` returns a promise that
 resolves on completion or rejects on failure. Sync requires Fundo to be enabled
 and also runs archive cleanup when the manager's hourly scan is due.
 
+Status includes `last_error` with a `stage`, `message`, and Unix timestamp `time`
+when a save fails. Stages are `capture`, `fallback`, `undo`, `baseline`, and
+`manifest`. A failure before a retry snapshot exists reports `transfer-error`;
+a retained snapshot reports `pending-transfer`. `:FundoStatus` prints the error
+and time, and `:FundoDoctor` lists failures by source path. A successful retry
+clears the error. Details are kept in memory for tracked buffers and detached
+pending snapshots; they do not survive restarting Neovim.
+
 New snapshots store Neovim buffer text independently of the source file's
 encoding and line endings. A clean file with no undo history can have a usable
 baseline without a fallback; `:FundoStatus` reports this as `baseline-only`.

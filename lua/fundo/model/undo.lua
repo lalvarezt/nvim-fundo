@@ -12,6 +12,10 @@ local manifest = require('fundo.manifest')
 
 local archiveDirMode = 448 -- 0o700
 
+local function transferError(stage, err)
+    return {stage = stage, message = tostring(err), time = os.time()}
+end
+
 local function undoDisabled(bufnr)
     local levels = vim.bo[bufnr].undolevels
     if levels == -123456 then
@@ -142,6 +146,7 @@ function Undo:reset(dirty, bufName)
     end
     local name = bufName or api.nvim_buf_get_name(self.bufnr)
     if name ~= self.name then
+        self.lastError = nil
         self.undoPath = fn.undofile(name)
         self.fallbackPath = Undo.archivePath(name, self.undoPath, self.dir)
         self.baselinePath = self.fallbackPath .. '.base'
@@ -255,11 +260,14 @@ function Undo:saveBaseline()
     local contents = bufferContents(self.bufnr)
     if not self:canSaveBaseline({type = 'file', size = #contents}) then
         self:deleteBaseline()
+        self.lastError = nil
         return false
     end
+    local stage = 'baseline'
     local ok, err = pcall(function()
         fs.mkdirpSync(path.dirname(self.baselinePath), archiveDirMode)
         fs.writeFileSync(self.baselinePath, contents)
+        stage = 'manifest'
         local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
         manifest.write({
             name = self.name,
@@ -271,9 +279,11 @@ function Undo:saveBaseline()
         })
     end)
     if not ok then
+        self.lastError = transferError(stage, err)
         pcall(log.warn, 'failed to save baseline archive:', self.baselinePath, err)
-        return false
+        return false, err
     end
+    self.lastError = nil
     log.debug('saved baseline archive:', self.baselinePath)
     return true
 end
@@ -290,11 +300,22 @@ local function saveBaselineSnapshot(transfer)
 end
 
 function Undo.completePendingTransferSync(transfer)
-    fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
-    fs.writeFileSync(transfer.fallbackPath, transfer.contents)
-    fs.writeFileSync(transfer.undoPath, transfer.undoContents)
-    saveBaselineSnapshot(transfer)
-    manifest.write(transfer)
+    local stage = 'fallback'
+    local ok, err = pcall(function()
+        fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
+        fs.writeFileSync(transfer.fallbackPath, transfer.contents)
+        stage = 'undo'
+        fs.writeFileSync(transfer.undoPath, transfer.undoContents)
+        stage = 'baseline'
+        saveBaselineSnapshot(transfer)
+        stage = 'manifest'
+        manifest.write(transfer)
+    end)
+    if not ok then
+        transfer.lastError = transferError(stage, err)
+        error(err, 0)
+    end
+    transfer.lastError = nil
 end
 
 function Undo.completePendingTransfer(transfer)
@@ -546,6 +567,9 @@ function Undo:shouldTransfer()
     if not (vim.in_fast_event and vim.in_fast_event()) and undoDisabled(self.bufnr) then
         return logTransferDecision(self, false, 'undo-disabled')
     end
+    if self.lastError or self.pendingTransfer then
+        return logTransferDecision(self, true, 'retry')
+    end
     if self.isDirty then
         return logTransferDecision(self, true, 'dirty')
     end
@@ -601,12 +625,18 @@ function Undo:transferSync()
         return
     end
     if self:isEmpty() then
-        self:saveBaseline()
+        local _, err = self:saveBaseline()
+        if err then error(err, 0) end
         self.isDirty = false
         return
     end
     log.debug('transferSync started:', self.bufnr, self.name or '')
-    local transfer = self:transferSnapshot()
+    local captured, transfer = pcall(self.transferSnapshot, self)
+    if not captured then
+        self.lastError = transferError('capture', transfer)
+        error(transfer, 0)
+    end
+    self.lastError = nil
     self.pendingTransfer = transfer
     Undo.completePendingTransferSync(transfer)
     self.pendingTransfer = nil

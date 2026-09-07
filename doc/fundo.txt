@@ -213,6 +213,14 @@ API                                                                 *fundo-api*
         Return structured preservation status for the current buffer, a buffer
         number, or a file path. `:FundoStatus [path]` prints the same information.
         Path status includes pending transfers after the buffer closes.
+        `last_error` is nil or a table with `stage`, `message`, and `time` as a
+        Unix timestamp in seconds. Stages are `capture`, `fallback`, `undo`,
+        `baseline`, and `manifest`. The command prints the time in local time.
+        A failed save without a pending snapshot has state `transfer-error`.
+        With a retained snapshot, the state remains `pending-transfer`.
+        A successful retry clears the error. Error details remain in memory
+        while the buffer is tracked or its snapshot awaits a detached retry.
+        They do not survive restarting Neovim.
 
                                                         *fundo.doctor()*
 `require('fundo').doctor()`~
@@ -221,6 +229,8 @@ API                                                                 *fundo-api*
         manifests, orphaned artifacts, and permission problems.
         Pending transfers make `ok` false until saved. The count includes open
         buffers and detached retries, counting each archive once.
+        Save failures also produce `transfer-error` issues with the source path,
+        failed stage, and error message, including failures during capture.
 
                                                         *fundo.sync()*
                                                         *:FundoSync*

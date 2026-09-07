@@ -432,6 +432,110 @@ describe('fundo integration.', function()
             assert_history_restores_to({'unsaved'})
         end)
 
+        for _, stage in ipairs({'capture', 'fallback', 'undo', 'baseline', 'manifest'}) do
+            it('reports the ' .. stage .. ' failure and clears it after retry.', function()
+                open_file_with_history({'one'}, {'two'})
+                edit_and_write({'three'})
+                local u = manager:get(api.nvim_get_current_buf())
+                local fs = require('fundo.fs')
+                local originalWrite = fs.writeFileSync
+                local originalSave = u.saveUndo
+                local targets = {
+                    fallback = u.fallbackPath, undo = u.undoPath, baseline = u.baselinePath,
+                    manifest = require('fundo.manifest').path(u.fallbackPath),
+                }
+                if stage == 'capture' then
+                    u.saveUndo = function() return false, 'injected capture failure' end
+                else
+                    rawset(fs, 'writeFileSync', function(target, data, mode)
+                        if target == targets[stage] then error('injected ' .. stage .. ' failure') end
+                        return originalWrite(target, data, mode)
+                    end)
+                end
+                local started = os.time()
+                local ok = sync_result()
+                rawset(fs, 'writeFileSync', originalWrite)
+                u.saveUndo = originalSave
+
+                assert.False(ok)
+                local status = require('fundo').status(file)
+                assert.equal(stage == 'capture' and 'transfer-error' or 'pending-transfer', status.state)
+                assert.equal(stage ~= 'capture', status.pending)
+                assert.equal(stage, status.last_error.stage)
+                assert.truthy(status.last_error.message:find('injected ' .. stage .. ' failure', 1, true))
+                assert.True(status.last_error.time >= started and status.last_error.time <= os.time())
+                local fields = vim.tbl_keys(status.last_error)
+                table.sort(fields)
+                assert.same({'message', 'stage', 'time'}, fields)
+                local diagnostics = require('fundo.diagnostics')
+                assert.truthy(diagnostics.formatStatus(status):find('last error [' .. stage .. ']', 1, true))
+                assert.truthy(diagnostics.formatStatus(status):find('retry: :FundoSync', 1, true))
+                assert.False(require('fundo').doctor().ok)
+                assert.truthy(diagnostics.formatDoctor(require('fundo').doctor()):find('injected ' .. stage, 1, true))
+                status.last_error.message = 'caller mutation'
+                assert.are_not.equal('caller mutation', require('fundo').status(file).last_error.message)
+
+                assert.True(sync_result())
+
+                assert.is_nil(require('fundo').status(file).last_error)
+                assert.True(require('fundo').doctor().ok)
+                vim.cmd('bwipeout!')
+                external_write({'external', 'change'})
+                vim.cmd('edit ' .. fn.fnameescape(file))
+                assert_history_restores_to({'three'})
+            end)
+        end
+
+        it('retains and updates detached failure details until retry succeeds.', function()
+            open_file_with_history({'one'}, {'two'})
+            edit_and_write({'three'})
+            local fs = require('fundo.fs')
+            local originalWrite = fs.writeFileSync
+            rawset(fs, 'writeFileSync', function() error('first failure') end)
+            vim.cmd('bwipeout!')
+            local first = require('fundo').status(file)
+            rawset(fs, 'writeFileSync', function() error('second failure') end)
+            local ok = sync_result()
+            rawset(fs, 'writeFileSync', originalWrite)
+
+            assert.False(first.tracked)
+            assert.equal('fallback', first.last_error.stage)
+            assert.truthy(first.last_error.message:find('first failure', 1, true))
+            assert.False(ok)
+            local latest = require('fundo').status(file).last_error
+            assert.truthy(latest.message:find('second failure', 1, true))
+            assert.True(latest.time >= first.last_error.time)
+            assert.True(sync_result())
+            assert.is_nil(require('fundo').status(file).last_error)
+            assert.True(require('fundo').doctor().ok)
+        end)
+
+        for _, stage in ipairs({'baseline', 'manifest'}) do
+            it('retries a clean baseline after a ' .. stage .. ' failure.', function()
+                fn.writefile({'baseline'}, file)
+                local fs = require('fundo.fs')
+                local originalWrite = fs.writeFileSync
+                rawset(fs, 'writeFileSync', function(target, data, mode)
+                    if (stage == 'baseline' and target:sub(-5) == '.base')
+                        or (stage == 'manifest' and target:sub(-5) == '.json') then
+                        error('clean ' .. stage .. ' failure')
+                    end
+                    return originalWrite(target, data, mode)
+                end)
+                vim.cmd('edit ' .. fn.fnameescape(file))
+                local ok = sync_result()
+                rawset(fs, 'writeFileSync', originalWrite)
+
+                assert.False(ok)
+                assert.False(require('fundo').status(file).pending)
+                assert.equal(stage, require('fundo').status(file).last_error.stage)
+                assert.equal('transfer-error', require('fundo').status(file).state)
+                assert.True(sync_result())
+                assert.is_nil(require('fundo').status(file).last_error)
+                assert.equal('baseline-only', require('fundo').status(file).state)
+            end)
+        end
+
         it('persists other buffers when one transfer fails.', function()
             open_file_with_history({'one'}, {'two'})
             edit_and_write({'three'})
@@ -453,6 +557,7 @@ describe('fundo integration.', function()
             assert.truthy(tostring(err):find('one archive unavailable', 1, true))
             assert.True(require('fundo').status(file).pending)
             assert.equal('healthy', require('fundo').status(other).state)
+            assert.is_nil(require('fundo').status(other).last_error)
             assert.same({'other saved'}, fn.readfile(require('fundo').status(other).fallback.path))
             assert.True(sync_result())
             assert.False(require('fundo').status(file).pending)

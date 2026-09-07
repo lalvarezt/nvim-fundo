@@ -10,6 +10,11 @@ local utils = require('fundo.utils')
 
 local M = {}
 
+local function lastError(tracked, pending)
+    return (tracked and (tracked.lastError or (tracked.pendingTransfer and tracked.pendingTransfer.lastError)))
+        or (pending and pending.lastError)
+end
+
 local function artifact(pathname)
     local stat = pathname ~= '' and fs.statSync(pathname) or nil
     return {
@@ -62,6 +67,7 @@ function M.status(target)
     local manifestPath = fallbackPath ~= '' and manifest.path(fallbackPath) or ''
     local pending = (tracked and tracked.pendingTransfer ~= nil)
         or (manager.pendingTransfers and manager.pendingTransfers[fallbackPath] ~= nil) or false
+    local failure = lastError(tracked, manager.pendingTransfers and manager.pendingTransfers[fallbackPath])
     local manifestValue, manifestError
     if manifestPath ~= '' then
         manifestValue, manifestError = manifest.read(manifestPath, fallbackPath)
@@ -76,6 +82,8 @@ function M.status(target)
         state = 'filtered'
     elseif pending then
         state = 'pending-transfer'
+    elseif failure then
+        state = 'transfer-error'
     elseif tracked and tracked.isDirty then
         state = 'dirty'
     elseif fs.statSync(fallbackPath) and manifestValue then
@@ -98,6 +106,7 @@ function M.status(target)
         tracked = tracked ~= nil,
         dirty = tracked and tracked.isDirty == true or false,
         pending = pending,
+        last_error = failure and vim.deepcopy(failure) or nil,
         last_action = tracked and tracked.lastAction or nil,
         last_updated = tracked and tracked.lastUpdated or nil,
         state = state,
@@ -210,17 +219,32 @@ function M.doctor()
     end
 
     local pendingPaths = {}
-    for key in pairs(manager.pendingTransfers or {}) do
+    local failures = {}
+    for key, transfer in pairs(manager.pendingTransfers or {}) do
         pendingPaths[key] = true
+        if transfer.lastError then
+            failures[key] = {name = transfer.name, error = transfer.lastError}
+        end
     end
     for _, tracked in pairs(manager.undos or {}) do
         if tracked.pendingTransfer then
             pendingPaths[tracked.pendingTransfer.fallbackPath] = true
         end
+        local failure = lastError(tracked)
+        if failure then
+            failures[tracked.fallbackPath] = {name = tracked.name, error = failure}
+        end
     end
     local pendingCount = vim.tbl_count(pendingPaths)
     if pendingCount > 0 then
         issue('pending-transfer', ('%d archive transfers are waiting to be saved'):format(pendingCount))
+    end
+    local failurePaths = vim.tbl_keys(failures)
+    table.sort(failurePaths)
+    for _, key in ipairs(failurePaths) do
+        local failure = failures[key]
+        issue('transfer-error', ('%s [%s]: %s'):format(
+            failure.name, failure.error.stage, failure.error.message))
     end
 
     return {
@@ -266,6 +290,11 @@ function M.formatStatus(value)
     end
     if value.filter_error then
         table.insert(lines, '  filter error: ' .. value.filter_error)
+    end
+    if value.last_error then
+        table.insert(lines, ('  last error [%s]: %s'):format(value.last_error.stage, value.last_error.message))
+        table.insert(lines, '  failed at: ' .. os.date('%Y-%m-%d %H:%M:%S %z', value.last_error.time))
+        table.insert(lines, '  retry: :FundoSync')
     end
     if value.last_action then
         table.insert(lines, '  last action: ' .. value.last_action)
