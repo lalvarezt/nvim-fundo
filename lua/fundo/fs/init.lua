@@ -53,6 +53,9 @@ function FS.writeFileSync(target, data, mode)
             if not written then
                 error(currentErr)
             end
+            if written == 0 then
+                error('write made no progress: ' .. target)
+            end
             offset = offset + written
         end
     end)

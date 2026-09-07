@@ -102,6 +102,77 @@ describe('fs module on Unix.', function()
             assert.same({}, vim.fn.glob(dirTarget .. '.__*', false, true))
         end)
     end)
+    describe('synchronous atomic write,', function()
+        local target
+        local write
+
+        before_each(function()
+            target = vim.fn.tempname()
+            vim.fn.writefile({'original'}, target, 'b')
+            write = vim.loop.fs_write
+        end)
+
+        after_each(function()
+            vim.loop.fs_write = write
+            os.remove(target)
+            for _, p in ipairs(vim.fn.glob(target .. '.__*', false, true)) do
+                os.remove(p)
+            end
+        end)
+
+        it('completes partial writes before replacing the target', function()
+            vim.loop.fs_write = function(fd, data, offset)
+                return write(fd, data:sub(1, 2), offset)
+            end
+
+            fs.writeFileSync(target, 'replacement')
+
+            assert.same({'replacement'}, vim.fn.readfile(target, 'b'))
+            assert.same({}, vim.fn.glob(target .. '.__*', false, true))
+        end)
+
+        it('preserves the target and removes the temporary file after a write error', function()
+            vim.loop.fs_write = function(fd, data, offset)
+                if offset == 0 then
+                    return write(fd, data:sub(1, 2), offset)
+                end
+                return nil, 'injected write failure'
+            end
+
+            local ok, err = pcall(fs.writeFileSync, target, 'replacement')
+
+            assert.False(ok)
+            assert.truthy(tostring(err):find('injected write failure', 1, true))
+            assert.same({'original'}, vim.fn.readfile(target, 'b'))
+            assert.same({}, vim.fn.glob(target .. '.__*', false, true))
+        end)
+
+        it('fails without retrying when a write makes no progress', function()
+            local calls = 0
+            vim.loop.fs_write = function()
+                calls = calls + 1
+                if calls > 1 then
+                    return nil, 'unexpected retry'
+                end
+                return 0
+            end
+
+            local ok, err = pcall(fs.writeFileSync, target, 'replacement')
+
+            assert.False(ok)
+            assert.truthy(tostring(err):find('write made no progress', 1, true))
+            assert.equal(1, calls)
+            assert.same({'original'}, vim.fn.readfile(target, 'b'))
+            assert.same({}, vim.fn.glob(target .. '.__*', false, true))
+        end)
+
+        it('replaces the target with an empty file', function()
+            fs.writeFileSync(target, '')
+
+            assert.equal(0, fs.statSync(target).size)
+            assert.same({}, vim.fn.glob(target .. '.__*', false, true))
+        end)
+    end)
     describe('synchronous mkdirp,', function()
         local nestedPath
         setup(function()
