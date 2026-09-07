@@ -374,6 +374,91 @@ describe('fundo integration.', function()
         end)
     end
 
+    describe('explicit sync,', function()
+        local function sync_result()
+            local finished, success, reason = false, false, nil
+            require('fundo').sync():thenCall(function()
+                success, finished = true, true
+            end, function(err)
+                reason, finished = tostring(err), true
+            end)
+            assert.True(vim.wait(1000, function() return finished end, 10))
+            return success, reason
+        end
+
+        it('succeeds with no pending work and rejects while disabled.', function()
+            assert.True(sync_result())
+            require('fundo').disable()
+            local ok, err = sync_result()
+            assert.False(ok)
+            assert.truthy(tostring(err):find('Fundo is disabled', 1, true))
+        end)
+
+        for _, detached in ipairs({false, true}) do
+            it('retries a failed transfer with detached=' .. tostring(detached) .. '.', function()
+                open_file_with_history({'one'}, {'two'})
+                edit_and_write({'three'})
+                local fs = require('fundo.fs')
+                local originalWrite = fs.writeFileSync
+                rawset(fs, 'writeFileSync', function() error('explicit sync failure') end)
+                local ok, err = sync_result()
+                if detached then vim.cmd('bwipeout!') end
+                rawset(fs, 'writeFileSync', originalWrite)
+                assert.False(ok)
+                assert.truthy(tostring(err):find('explicit sync failure', 1, true))
+                assert.True(require('fundo').status(file).pending)
+
+                assert.True(sync_result())
+
+                assert.False(require('fundo').status(file).pending)
+                vim.cmd('silent! bwipeout!')
+                external_write({'external', 'change'})
+                vim.cmd('edit ' .. fn.fnameescape(file))
+                assert_history_restores_to({'three'})
+            end)
+        end
+
+        it('persists modified buffer history without writing its source.', function()
+            open_file_with_history({'one'}, {'two'})
+            api.nvim_buf_set_lines(0, 0, -1, false, {'unsaved'})
+
+            assert.True(sync_result())
+
+            assert.True(vim.bo.modified)
+            assert.same({'two'}, fn.readfile(file))
+            vim.cmd('bwipeout!')
+            external_write({'external', 'change'})
+            vim.cmd('edit ' .. fn.fnameescape(file))
+            assert_history_restores_to({'unsaved'})
+        end)
+
+        it('persists other buffers when one transfer fails.', function()
+            open_file_with_history({'one'}, {'two'})
+            edit_and_write({'three'})
+            local first = manager:get(api.nvim_get_current_buf())
+            local other = path.join(tmpdir, 'other.txt')
+            fn.writefile({'other'}, other)
+            vim.cmd('edit ' .. fn.fnameescape(other))
+            edit_and_write({'other saved'})
+            local fs = require('fundo.fs')
+            local originalWrite = fs.writeFileSync
+            rawset(fs, 'writeFileSync', function(target, data, mode)
+                if target == first.fallbackPath then error('one archive unavailable') end
+                return originalWrite(target, data, mode)
+            end)
+            local ok, err = sync_result()
+            rawset(fs, 'writeFileSync', originalWrite)
+
+            assert.False(ok)
+            assert.truthy(tostring(err):find('one archive unavailable', 1, true))
+            assert.True(require('fundo').status(file).pending)
+            assert.equal('healthy', require('fundo').status(other).state)
+            assert.same({'other saved'}, fn.readfile(require('fundo').status(other).fallback.path))
+            assert.True(sync_result())
+            assert.False(require('fundo').status(file).pending)
+        end)
+    end)
+
     it('retries a detached snapshot after the source has disappeared.', function()
         local fs = require('fundo.fs')
         local writeFileSync = fs.writeFileSync

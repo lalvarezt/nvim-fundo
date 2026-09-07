@@ -104,6 +104,12 @@ Synchronization does not write or recreate the source file.
 archive once across open buffers and detached retries. A successful retry clears
 the pending state.
 
+Run `:FundoSync` to persist current recovery snapshots and retry pending saves.
+It includes modified tracked buffers without writing their source files, and
+reports completion or failure. `require('fundo').sync()` returns a promise that
+resolves on completion or rejects on failure. Sync requires Fundo to be enabled
+and also runs archive cleanup when the manager's hourly scan is due.
+
 New snapshots store Neovim buffer text independently of the source file's
 encoding and line endings. A clean file with no undo history can have a usable
 baseline without a fallback; `:FundoStatus` reports this as `baseline-only`.

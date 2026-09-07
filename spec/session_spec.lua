@@ -44,6 +44,40 @@ describe('closed Neovim sessions.', function()
         })
     end
 
+    it('runs FundoSync and reports completion and failure in a clean process.', function()
+        fn.writefile({'one'}, file)
+        local report = map_report(run([[
+            local notices = {}
+            vim.notify = function(message, level)
+                table.insert(notices, {message = message, level = level})
+            end
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'unsaved'})
+            local fs = require('fundo.fs')
+            local original = fs.writeFileSync
+            fs.writeFileSync = function() error('command write failure') end
+            vim.cmd('FundoSync')
+            assert(vim.wait(1000, function() return #notices == 1 end, 10))
+            assert(notices[1].level == vim.log.levels.ERROR)
+            assert(notices[1].message:find('command write failure', 1, true))
+            fs.writeFileSync = original
+            vim.cmd('FundoSync')
+            assert(vim.wait(1000, function() return #notices == 2 end, 10))
+            assert(notices[2].level == vim.log.levels.INFO)
+            WriteReport({
+                'message=' .. notices[2].message,
+                'state=' .. require('fundo').status().state,
+                'modified=' .. tostring(vim.bo.modified),
+                'source=' .. table.concat(vim.fn.readfile(FILE), '|'),
+            })
+            vim.cmd('quitall!')
+        ]]).lines)
+        assert.equal('Fundo sync complete', report.message)
+        assert.equal('healthy', report.state)
+        assert.equal('true', report.modified)
+        assert.equal('one', report.source)
+    end)
+
     local function create_linear_history()
         fn.writefile({'one'}, file)
         run([[

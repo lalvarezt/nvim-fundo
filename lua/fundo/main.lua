@@ -51,6 +51,25 @@ local function createCommand()
         local diagnostics = require('fundo.diagnostics')
         print(diagnostics.formatDoctor(require('fundo').doctor()))
     end, {force = true})
+    api.nvim_create_user_command('FundoSync', function()
+        M.sync():thenCall(function()
+            vim.notify('Fundo sync complete', vim.log.levels.INFO)
+        end, function(err)
+            vim.notify('Fundo sync failed: ' .. tostring(err), vim.log.levels.ERROR)
+        end)
+    end, {force = true})
+end
+
+function M.sync()
+    if not enabled then
+        return require('promise').reject('Fundo is disabled; run :FundoEnable before syncing')
+    end
+    for bufnr, tracked in pairs(manager.undos) do
+        if api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].modified then
+            tracked:reset(true)
+        end
+    end
+    return manager:syncAll()
 end
 
 function M.enable()

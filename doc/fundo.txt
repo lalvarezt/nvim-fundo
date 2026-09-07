@@ -222,4 +222,16 @@ API                                                                 *fundo-api*
         Pending transfers make `ok` false until saved. The count includes open
         buffers and detached retries, counting each archive once.
 
+                                                        *fundo.sync()*
+                                                        *:FundoSync*
+`require('fundo').sync()`~
+        Persist recovery snapshots and retry pending transfers. Includes modified
+        tracked buffers without writing their source files. Returns a promise
+        that resolves on completion or rejects on failure, including when Fundo
+        is disabled. Successful transfers remain saved if another transfer fails.
+        Runs archive cleanup when the manager's hourly scan is due.
+
+        `:FundoSync` performs the same operation and reports completion or failure.
+        Enable Fundo with `:FundoEnable` before syncing.
+
 vim:tw=78:ts=8:ft=help:norl:

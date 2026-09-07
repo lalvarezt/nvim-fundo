@@ -23,6 +23,12 @@ function M.doctor()
     return require('fundo.diagnostics').doctor()
 end
 
+---Persist recovery snapshots and retry pending transfers without writing source buffers.
+---@return Promise
+function M.sync()
+    return require('fundo.main').sync()
+end
+
 ---Setup configuration and enable fundo
 ---@param opts? FundoConfig
 function M.setup(opts)
