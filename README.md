@@ -86,7 +86,22 @@ Fundo handles the common external-change cases:
   history;
 - when a loaded buffer is dirty, Neovim keeps the unsaved buffer unchanged, and
   Fundo does not replace it with external contents;
-- external overwrites, appends, and truncates are handled as file-content changes.
+- external overwrites, appends, and truncates are handled as file-content changes;
+- deleting or renaming an open file does not prevent Fundo from archiving its
+  buffer and undo history. Reopening the old path can recover that history,
+  including when the path is still missing;
+- new files are tracked on creation and first write. `:file` and `:saveas`
+  update tracking to the buffer's new path.
+
+Transfers capture the buffer text and native undo tree together. They do not
+copy from the source pathname, which may have disappeared or changed since the
+last write. Failed transfers retain both snapshots for retry after buffer unload.
+A newer transfer takes precedence over an older pending snapshot for that path.
+Synchronization does not write or recreate the source file.
+
+New snapshots store Neovim buffer text independently of the source file's
+encoding and line endings. A clean file with no undo history can have a usable
+baseline without a fallback; `:FundoStatus` reports this as `baseline-only`.
 
 Each successfully persisted fallback record has a versioned manifest in the
 private `.metadata` archive subdirectory. The manifest records the source,
@@ -102,8 +117,10 @@ tracking. Pruning removes an expired or over-budget record together with its
 metadata.
 
 File moves are still listed as a TODO feature. Today, Fundo tracks the path that
-Neovim reports for a buffer and can follow paths changed with `:saveas`, but it
+Neovim reports for a buffer and can follow paths changed with `:file` or `:saveas`, but it
 does not claim complete move/rename recovery for arbitrary external moves.
+Neovim can still report `E211` when `:checktime` detects a missing source file.
+That warning does not mean Fundo's archive transfer failed.
 
 ## Vendored Dependencies
 
@@ -171,6 +188,7 @@ make lint
 The test target runs the specs through headless Neovim. The `build/` directory is
 generated dependency state. `lua/fundo/types.lua` contains local Lua language
 server helper types for Neovim/libuv objects used by this project.
+See [TESTING.md](./TESTING.md) for the recovery cases and validation boundaries.
 
 ## Feedback
 

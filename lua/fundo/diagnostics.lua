@@ -56,7 +56,8 @@ function M.status(target)
     end
 
     local undoPath = name ~= '' and fn.undofile(name) or ''
-    local fallbackPath = undoPath ~= '' and path.join(config.archives_dir, path.basename(undoPath)) or ''
+    local fallbackPath = undoPath ~= ''
+        and require('fundo.model.undo').archivePath(name, undoPath, config.archives_dir) or ''
     local baselinePath = fallbackPath ~= '' and fallbackPath .. '.base' or ''
     local manifestPath = fallbackPath ~= '' and manifest.path(fallbackPath) or ''
     local manifestValue, manifestError
@@ -81,6 +82,8 @@ function M.status(target)
         state = 'legacy-archive'
     elseif fs.statSync(fallbackPath) then
         state = 'invalid-manifest'
+    elseif fs.statSync(baselinePath) then
+        state = 'baseline-only'
     else
         state = 'no-archive'
     end
@@ -179,14 +182,11 @@ function M.doctor()
     local cutoff = config.retention_days and os.time() - config.retention_days * 24 * 60 * 60 or nil
     for key, record in pairs(records) do
         local fallbackPath = path.join(config.archives_dir, key)
-        if record.baseline and not record.fallback then
-            issue('orphan-baseline', 'baseline has no fallback: ' .. key .. '.base')
-        end
-        if record.manifest and not record.fallback then
+        if record.manifest and not record.fallback and not record.baseline then
             issue('orphan-manifest', 'manifest has no fallback: ' .. key .. '.json')
         elseif record.fallback and not record.manifest then
             legacy = legacy + 1
-        elseif record.fallback and record.manifest then
+        elseif record.manifest then
             local _, err = manifest.read(manifest.path(fallbackPath), fallbackPath)
             if err then
                 issue('invalid-manifest', key .. ': ' .. err)

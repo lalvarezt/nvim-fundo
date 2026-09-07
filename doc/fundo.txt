@@ -140,15 +140,35 @@ Supported external-change cases:
   These are treated as file-content changes and can be repaired when the matching
   native undo file and fallback archive are available.
 
+- External deletion or rename of an open file:
+  Fundo captures the buffer text with its undo tree, even if the source pathname
+  no longer exists. Reopening the old path can recover that history. Fundo does
+  not recreate or write the source file during synchronization.
+
+- New files and buffer renames:
+  `BufNewFile` and the first write attach new files. `:file` and `:saveas` update
+  tracking to the new buffer name and apply the configured filter again.
+
+Failed transfers retain a matching text and undo snapshot for retry after buffer
+unload. Newer saved state takes precedence over an older pending snapshot.
+Snapshots use Neovim buffer text, independent of source encoding and line endings.
+Baseline-only records remain eligible for recovery until age or size pruning
+removes them. Diagnostics report these records as `baseline-only`.
+
 Fundo also syncs dirty undo state during lifecycle events such as `BufUnload`,
 `VimLeave`, `VimSuspend`, `TermEnter`, and `FocusLost`.
 
 File moves are not a complete recovery guarantee. Fundo tracks the path Neovim
-reports for a buffer and follows paths changed with `:saveas`, but arbitrary
+reports for a buffer and follows paths changed with `:file` or `:saveas`, but arbitrary
 external move/rename recovery is still future work.
 
 ==============================================================================
 TROUBLESHOOTING                                          *fundo-troubleshooting*
+
+E211 after deleting or renaming an open file~
+        Neovim reports a missing source during `:checktime`. Fundo can still
+        archive the loaded buffer. After an external rename, use `:file new-path`
+        to associate that buffer and its history with the new path.
 
 No undo history after an external change~
         The native undo file and fallback archive must match. If the fallback

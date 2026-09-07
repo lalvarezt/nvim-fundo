@@ -2,8 +2,6 @@ local api = vim.api
 local fn = vim.fn
 local cmd = vim.cmd
 
-local async = require('async')
-local await = async.wait
 local promise = require('promise')
 local path = require('fundo.fs.path')
 local fs = require('fundo.fs')
@@ -13,6 +11,43 @@ local config = require('fundo.config')
 local manifest = require('fundo.manifest')
 
 local archiveDirMode = 448 -- 0o700
+
+local function undoDisabled(bufnr)
+    local levels = vim.bo[bufnr].undolevels
+    if levels == -123456 then
+        levels = vim.go.undolevels
+    end
+    return not vim.bo[bufnr].undofile or levels < 0
+end
+
+local function readSnapshot(filename)
+    local lines = fn.readfile(filename, 'b')
+    if lines[#lines] ~= '' then
+        error('incomplete buffer snapshot: ' .. filename)
+    end
+    table.remove(lines)
+    for i, line in ipairs(lines) do
+        lines[i] = line:gsub('\n', '\0')
+    end
+    return lines
+end
+
+local function bufferContents(bufnr)
+    return table.concat(api.nvim_buf_get_lines(bufnr, 0, -1, false), '\n') .. '\n'
+end
+
+local function readLegacySnapshot(filename)
+    local bufnr = api.nvim_create_buf(false, true)
+    local ok, lines = pcall(utils.bufCall, bufnr, function()
+        vim.bo[bufnr].undofile = false
+        cmd('silent noautocmd keepalt 0read ' .. fn.fnameescape(filename))
+        local result = api.nvim_buf_get_lines(bufnr, 0, -2, false)
+        return #result == 0 and {''} or result
+    end)
+    api.nvim_buf_delete(bufnr, {force = true})
+    if not ok then error(lines) end
+    return lines
+end
 
 ---@class FundoUndo
 ---@field dir string
@@ -31,6 +66,16 @@ local function isLogFile(name)
         and path.normalize(name) == path.normalize(config.logging.path)
 end
 
+function Undo.archivePath(name, undoPath, dir)
+    local key = path.basename(undoPath)
+    -- Adjacent undo files do not encode their parent directory. The .base
+    -- suffix is reserved for baselines and must never name a fallback.
+    if key:sub(-5) == '.base' or key == '.' .. path.basename(name) .. '.un~' then
+        key = '@' .. fn.sha256(path.normalize(name))
+    end
+    return path.join(dir, key)
+end
+
 function Undo:new(bufnr, dir)
     local o = setmetatable({}, self)
     self.__index = self
@@ -40,8 +85,14 @@ function Undo:new(bufnr, dir)
 end
 
 function Undo:attach()
+    if not api.nvim_buf_is_loaded(self.bufnr) then
+        return false
+    end
     local bt = vim.bo[self.bufnr].bt
     local name = api.nvim_buf_get_name(self.bufnr)
+    if name == '' then
+        return false
+    end
     if path.dirname(name) == self.dir or manifest.isPath(name, self.dir) then
         log.debug('attach disabled undofile for archive buffer:', self.bufnr, name)
         vim.bo[self.bufnr].undofile = false
@@ -92,9 +143,27 @@ function Undo:reset(dirty, bufName)
     local name = bufName or api.nvim_buf_get_name(self.bufnr)
     if name ~= self.name then
         self.undoPath = fn.undofile(name)
-        local basename = path.basename(self.undoPath)
-        self.fallbackPath = path.join(self.dir, basename)
+        self.fallbackPath = Undo.archivePath(name, self.undoPath, self.dir)
         self.baselinePath = self.fallbackPath .. '.base'
+        local legacyPath = path.join(self.dir, path.basename(self.undoPath))
+        if legacyPath ~= self.fallbackPath and not fs.statSync(self.fallbackPath)
+            and not fs.statSync(self.baselinePath) then
+            local record = manifest.read(manifest.path(legacyPath), legacyPath)
+            if record and path.normalize(record.source.path) == path.normalize(name) then
+                local ok, err = pcall(function()
+                    if fs.statSync(legacyPath) then fs.copyFileSync(legacyPath, self.fallbackPath) end
+                    if fs.statSync(legacyPath .. '.base') then
+                        fs.copyFileSync(legacyPath .. '.base', self.baselinePath)
+                    end
+                    manifest.write({
+                        name = name, undoPath = self.undoPath,
+                        fallbackPath = self.fallbackPath, baselinePath = self.baselinePath,
+                        snapshot_format = record.snapshot_format, baseline_format = record.baseline_format,
+                    })
+                end)
+                if not ok then pcall(log.warn, 'failed to migrate archive:', legacyPath, err) end
+            end
+        end
         log.debug('undo paths reset:', 'bufnr:', self.bufnr, 'file:', name, 'undo:', self.undoPath,
             'fallback:', self.fallbackPath, 'baseline:', self.baselinePath)
     end
@@ -125,13 +194,13 @@ function Undo:loadUndo()
     return ok, err
 end
 
-function Undo:saveUndo()
+function Undo:saveUndo(target)
     if self.undoPath == '' then
         log.debug('saveUndo skipped; empty undo path:', self.bufnr, self.name or '')
         return false
     end
     local ok, cmdOk, cmdErr = pcall(utils.bufCall, self.bufnr, function()
-        return pcall(cmd, 'sil wundo! ' .. fn.fnameescape(self.undoPath))
+        return pcall(cmd, 'sil wundo! ' .. fn.fnameescape(target or self.undoPath))
     end)
     if not ok then
         log.debug('saveUndo failed:', self.undoPath, cmdOk)
@@ -143,20 +212,6 @@ function Undo:saveUndo()
         log.debug('saveUndo failed:', self.undoPath, cmdErr)
     end
     return cmdOk, cmdErr
-end
-
-function Undo:saveUndoAsync()
-    return promise(function(resolve)
-        local function run()
-            local ok, err = self:saveUndo()
-            resolve({ok = ok, err = err})
-        end
-        if vim.in_fast_event and vim.in_fast_event() then
-            vim.schedule(run)
-        else
-            run()
-        end
-    end)
 end
 
 function Undo:baselineLimitBytes()
@@ -197,14 +252,23 @@ function Undo:saveBaseline()
         log.debug('saveBaseline skipped; missing paths:', self.bufnr, self.name or '', self.baselinePath or '')
         return false
     end
-    local stat = fs.statSync(self.name)
-    if not self:canSaveBaseline(stat) then
+    local contents = bufferContents(self.bufnr)
+    if not self:canSaveBaseline({type = 'file', size = #contents}) then
         self:deleteBaseline()
         return false
     end
     local ok, err = pcall(function()
         fs.mkdirpSync(path.dirname(self.baselinePath), archiveDirMode)
-        fs.copyFileSync(self.name, self.baselinePath)
+        fs.writeFileSync(self.baselinePath, contents)
+        local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+        manifest.write({
+            name = self.name,
+            undoPath = self.undoPath,
+            fallbackPath = self.fallbackPath,
+            baselinePath = self.baselinePath,
+            snapshot_format = record and record.snapshot_format,
+            baseline_format = 'buffer-lines-v1',
+        })
     end)
     if not ok then
         pcall(log.warn, 'failed to save baseline archive:', self.baselinePath, err)
@@ -215,50 +279,67 @@ function Undo:saveBaseline()
 end
 
 local function saveBaselineSnapshot(transfer)
-    local stat = fs.statSync(transfer.name)
     local limit = config.baseline_max_file_size * 1024 * 1024
-    if limit <= 0 or not stat or (stat.type and stat.type ~= 'file')
-        or type(stat.size) ~= 'number' or stat.size > limit then
+    if limit <= 0 or #transfer.contents > limit then
         pcall(fs.unlinkSync, transfer.baselinePath)
         return false
     end
-    local ok = pcall(function()
-        fs.mkdirpSync(path.dirname(transfer.baselinePath), archiveDirMode)
-        fs.copyFileSync(transfer.name, transfer.baselinePath)
-    end)
-    return ok
+    fs.mkdirpSync(path.dirname(transfer.baselinePath), archiveDirMode)
+    fs.writeFileSync(transfer.baselinePath, transfer.contents)
+    return true
 end
 
 function Undo.completePendingTransferSync(transfer)
-    local stat = fs.statSync(transfer.name)
-    if not stat then
-        error('failed to stat buffer file: ' .. transfer.name)
-    end
     fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
-    fs.copyFileSync(transfer.name, transfer.fallbackPath)
+    fs.writeFileSync(transfer.fallbackPath, transfer.contents)
+    fs.writeFileSync(transfer.undoPath, transfer.undoContents)
     saveBaselineSnapshot(transfer)
     manifest.write(transfer)
 end
 
 function Undo.completePendingTransfer(transfer)
-    return async(function()
-        local stat = await(fs.stat(transfer.name))
-        if not stat then
-            error('failed to stat buffer file: ' .. transfer.name)
+    return promise(function(resolve, reject)
+        local function run()
+            local ok, err = pcall(Undo.completePendingTransferSync, transfer)
+            if ok then resolve() else reject(err) end
         end
-        fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
-        await(fs.copyFile(transfer.name, transfer.fallbackPath))
-        saveBaselineSnapshot(transfer)
-        manifest.write(transfer)
+        if vim.in_fast_event and vim.in_fast_event() then
+            vim.schedule(run)
+        else
+            run()
+        end
     end)
 end
 
 function Undo:transferSnapshot()
+    local bufferText = bufferContents(self.bufnr)
+    local temporary = fn.tempname()
+    local ok, err = self:saveUndo(temporary)
+    if not ok then
+        pcall(fs.unlinkSync, temporary)
+        error(err or ('failed to save undo file: ' .. self.undoPath))
+    end
+    local fd, openErr = fs.openSync(temporary, 'r', 0)
+    if not fd then
+        pcall(fs.unlinkSync, temporary)
+        error(openErr)
+    end
+    local stat = fs.fstatSync(fd)
+    local contents, readErr = fs.readSync(fd, stat.size, 0)
+    fs.closeSync(fd)
+    fs.unlinkSync(temporary)
+    if not contents or #contents ~= stat.size then
+        error(readErr or 'incomplete undo snapshot')
+    end
     return {
         name = self.name,
         undoPath = self.undoPath,
         fallbackPath = self.fallbackPath,
         baselinePath = self.baselinePath,
+        contents = bufferText,
+        undoContents = contents,
+        snapshot_format = 'buffer-lines-v1',
+        baseline_format = 'buffer-lines-v1',
     }
 end
 
@@ -267,7 +348,14 @@ function Undo:readBaseline()
         log.trace('readBaseline skipped; baseline missing:', self.baselinePath or '')
         return
     end
-    local ok, lines = pcall(fn.readfile, self.baselinePath)
+    local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+    local normalized = record and (record.baseline_format or record.snapshot_format) == 'buffer-lines-v1'
+    local ok, lines
+    if normalized then
+        ok, lines = pcall(readSnapshot, self.baselinePath)
+    else
+        ok, lines = pcall(readLegacySnapshot, self.baselinePath)
+    end
     if not ok then
         pcall(log.warn, 'failed to read baseline archive:', self.baselinePath, lines)
         return
@@ -355,12 +443,18 @@ function Undo:loadFileAndUndo(winid)
     local ok, err = pcall(function()
         local modified = vim.bo[self.bufnr].modified
         local lines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
-        utils.bufCall(self.bufnr, function()
-            cmd(([[
+        local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+        if record and record.snapshot_format == 'buffer-lines-v1' then
+            local archived = readSnapshot(self.fallbackPath)
+            api.nvim_buf_set_lines(self.bufnr, 0, -1, false, archived)
+        else
+            utils.bufCall(self.bufnr, function()
+                cmd(([[
                 keepalt sil %dread %s
                 keepj sil 1,%ddelete_
             ]]):format(#lines, fn.fnameescape(self.fallbackPath), #lines))
-        end)
+            end)
+        end
         missingUndo = not fs.statSync(self.undoPath)
         local undoOk, undoErr = self:loadUndo()
         if not undoOk then
@@ -437,6 +531,9 @@ function Undo:shouldTransfer()
     if not self.attached or self.undoPath == '' then
         return logTransferDecision(self, false, self.attached and 'empty-undo-path' or 'not-attached')
     end
+    if not (vim.in_fast_event and vim.in_fast_event()) and undoDisabled(self.bufnr) then
+        return logTransferDecision(self, false, 'undo-disabled')
+    end
     if self.isDirty then
         return logTransferDecision(self, true, 'dirty')
     end
@@ -471,25 +568,18 @@ function Undo:shouldTransfer()
 end
 
 function Undo:transfer()
-    return async(function()
-        if not self:shouldTransfer() then
-            log.debug('transfer skipped:', self.bufnr, self.name or '')
-            return
+    -- Capture and publish on one main-loop turn. Yielding between wundo and
+    -- publication lets unload, rename, or another write replace half the pair.
+    return promise(function(resolve, reject)
+        local function run()
+            local ok, err = pcall(self.transferSync, self)
+            if ok then resolve() else reject(err) end
         end
-        log.debug('transfer started:', self.bufnr, self.name or '')
-        local undo = await(self:saveUndoAsync())
-        if not undo.ok then
-            pcall(log.warn, 'failed to save undo file:', self.undoPath, undo.err)
-            error(undo.err or ('failed to save undo file: ' .. self.undoPath))
+        if vim.in_fast_event and vim.in_fast_event() then
+            vim.schedule(run)
+        else
+            run()
         end
-        local transfer = self:transferSnapshot()
-        self.pendingTransfer = transfer
-        await(Undo.completePendingTransfer(transfer))
-        self.pendingTransfer = nil
-        self.isDirty = false
-        self.lastAction = 'transferred'
-        self.lastUpdated = os.time()
-        log.debug('transfer completed:', self.bufnr, transfer.name, 'fallback:', transfer.fallbackPath)
     end)
 end
 
@@ -498,12 +588,12 @@ function Undo:transferSync()
         log.debug('transferSync skipped:', self.bufnr, self.name or '')
         return
     end
-    log.debug('transferSync started:', self.bufnr, self.name or '')
-    local undoOk, undoErr = self:saveUndo()
-    if not undoOk then
-        pcall(log.warn, 'failed to save undo file:', self.undoPath, undoErr)
-        error(undoErr or ('failed to save undo file: ' .. self.undoPath))
+    if self:isEmpty() then
+        self:saveBaseline()
+        self.isDirty = false
+        return
     end
+    log.debug('transferSync started:', self.bufnr, self.name or '')
     local transfer = self:transferSnapshot()
     self.pendingTransfer = transfer
     Undo.completePendingTransferSync(transfer)
@@ -517,6 +607,10 @@ end
 function Undo:check()
     if not self.attached or self.undoPath == '' then
         log.trace('check skipped:', self.bufnr, self.name or '', self.attached and 'empty-undo-path' or 'not-attached')
+        return
+    end
+    if vim.bo[self.bufnr].modified or not vim.bo[self.bufnr].modifiable
+        or undoDisabled(self.bufnr) then
         return
     end
     if not self:isEmpty() then
