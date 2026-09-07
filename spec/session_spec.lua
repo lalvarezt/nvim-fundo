@@ -298,6 +298,25 @@ describe('closed Neovim sessions.', function()
         assert_linear_recovery('external|change')
     end)
 
+    for _, operation in ipairs({'delete', 'rename'}) do
+        it('persists undo on exit after the open file is externally ' .. operation .. 'd.', function()
+            fn.writefile({'one'}, file)
+            run(([[
+                vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+                vim.api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
+                vim.cmd('write')
+                vim.api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two', 'three'})
+                vim.cmd('write')
+                %s
+                vim.cmd('quitall!')
+            ]]):format(operation == 'delete' and 'vim.fn.delete(FILE)'
+                or 'assert(vim.loop.fs_rename(FILE, FILE .. ".moved"))'))
+            assert.equal(0, fn.filereadable(file))
+            fn.writefile({'external', 'change'}, file)
+            assert_linear_recovery('external|change')
+        end)
+    end
+
     it('preserves linear undo history after an external append while closed.', function()
         create_linear_history()
 

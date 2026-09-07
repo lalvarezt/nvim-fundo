@@ -84,6 +84,8 @@ end
 function M.create(transfer)
     return {
         version = M.version,
+        snapshot_format = transfer.snapshot_format,
+        baseline_format = transfer.baseline_format,
         updated_at = os.time(),
         source = {
             path = path.normalize(transfer.name),

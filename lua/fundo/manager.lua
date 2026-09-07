@@ -51,11 +51,12 @@ function Manager:detach(bufnr)
             pcall(log.warn, 'failed to transfer undo archive for buffer', bufnr, err)
             if u.pendingTransfer then
                 self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
-                u:dispose()
-                self.undos[bufnr] = nil
             end
+            u:dispose()
+            self.undos[bufnr] = nil
             return false, err
         end
+        self.pendingTransfers[u.fallbackPath] = nil
         u:dispose()
         self.undos[bufnr] = nil
         log.debug('detached buffer:', bufnr)
@@ -116,8 +117,8 @@ function Manager:scanArchivesDir()
             end
         end
         for _, record in pairs(records) do
-            if record.fallback then
-                local fallbackPath = path.join(self.archivesDir, record.fallback.name)
+            if record.fallback or record.baseline then
+                local fallbackPath = path.join(self.archivesDir, record.name)
                 local manifestPath = manifest.path(fallbackPath)
                 local manifestStat = fs.statSync(manifestPath)
                 if manifestStat then
@@ -150,13 +151,18 @@ function Manager:scanArchivesDir()
         for _, record in ipairs(stats) do
             local essentialSize = record.fallback and record.fallback.size or 0
             essentialSize = essentialSize + (record.manifest and record.manifest.size or 0)
+            if not record.fallback then
+                essentialSize = essentialSize + (record.baseline and record.baseline.size or 0)
+            end
             local expired = cutoff and record.mtime < cutoff
-            if not expired and record.fallback and size + essentialSize <= limit then
+            if not expired and size + essentialSize <= limit then
                 size = size + essentialSize
-                if record.baseline and size + record.baseline.size <= limit then
-                    size = size + record.baseline.size
-                else
-                    remove(record.baseline)
+                if record.fallback then
+                    if record.baseline and size + record.baseline.size <= limit then
+                        size = size + record.baseline.size
+                    else
+                        remove(record.baseline)
+                    end
                 end
             else
                 remove(record.fallback)
@@ -188,15 +194,30 @@ function Manager:syncAll(block)
             for bufnr, u in pairs(self.undos) do
                 considered = considered + 1
                 if u:shouldTransfer() then
-                    tasks[bufnr] = u:transfer()
+                    local fallbackPath = u.fallbackPath
+                    local pending = self.pendingTransfers[fallbackPath]
+                    tasks[bufnr] = u:transfer():thenCall(function(value)
+                        if self.pendingTransfers[fallbackPath] == pending then
+                            self.pendingTransfers[fallbackPath] = nil
+                        end
+                        return value
+                    end)
                 end
             end
             for key, transfer in pairs(self.pendingTransfers) do
+                local active = false
+                for bufnr, u in pairs(self.undos) do
+                    if tasks[bufnr] and u.fallbackPath == key then active = true end
+                end
                 local pendingKey = key
-                tasks['pending:' .. pendingKey] = undo.completePendingTransfer(transfer):thenCall(function(value)
-                    self.pendingTransfers[pendingKey] = nil
-                    return value
-                end)
+                if not active then
+                    tasks['pending:' .. pendingKey] = undo.completePendingTransfer(transfer):thenCall(function(value)
+                        if self.pendingTransfers[pendingKey] == transfer then
+                            self.pendingTransfers[pendingKey] = nil
+                        end
+                        return value
+                    end)
+                end
             end
             log.debug('syncAll started:', 'block:', block == true, 'considered:', considered, 'transfers:', vim.tbl_count(tasks))
             if vim.tbl_isempty(tasks) then
@@ -249,6 +270,7 @@ function Manager:syncAllSync()
         local ok, err = pcall(function()
             if u:shouldTransfer() then
                 u:transferSync()
+                self.pendingTransfers[u.fallbackPath] = nil
             end
         end)
         if not ok then
@@ -318,9 +340,22 @@ function Manager:initialize()
             u:check()
         end
     end, self.disposables)
+    event:on('BufNewFile', function(bufnr)
+        local u = self:attach(bufnr)
+        if u then u:check() end
+    end, self.disposables)
+    event:on('BufFilePost', function(bufnr)
+        local u = self.undos[bufnr]
+        if u then
+            u:dispose()
+            self.undos[bufnr] = nil
+        end
+        u = self:attach(bufnr)
+        if u then u:reset(true) end
+    end, self.disposables)
     event:on('BufWritePost', function(bufnr)
         logBufferEvent('BufWritePost', bufnr)
-        local u = self.undos[bufnr]
+        local u = self:attach(bufnr)
         if u then
             u:reset(true)
         end

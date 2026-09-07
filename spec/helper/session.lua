@@ -12,7 +12,7 @@ local function shellescape(value)
     return fn.shellescape(value)
 end
 
-local repo = os.getenv('PWD') or fn.getcwd()
+local repo = fn.getcwd()
 
 function M.run(opts)
     counter = counter + 1
