@@ -324,12 +324,24 @@ function Undo:transferSnapshot()
         pcall(fs.unlinkSync, temporary)
         error(openErr)
     end
-    local stat = fs.fstatSync(fd)
-    local contents, readErr = fs.readSync(fd, stat.size, 0)
-    fs.closeSync(fd)
+    local readOk, contents = pcall(function()
+        local stat, statErr = fs.fstatSync(fd)
+        if not stat then
+            error(statErr)
+        end
+        local data, readErr = fs.readSync(fd, stat.size, 0)
+        if not data or #data ~= stat.size then
+            error(readErr or 'incomplete undo snapshot')
+        end
+        return data
+    end)
+    local closed, closeErr = fs.closeSync(fd)
     fs.unlinkSync(temporary)
-    if not contents or #contents ~= stat.size then
-        error(readErr or 'incomplete undo snapshot')
+    if not readOk then
+        error(contents)
+    end
+    if not closed then
+        error(closeErr)
     end
     return {
         name = self.name,

@@ -286,6 +286,53 @@ describe('fundo integration.', function()
         assert.equal(0, fn.filereadable(file))
     end)
 
+    for _, failure in ipairs({'stat', 'read', 'short read'}) do
+        it('cleans up an undo snapshot after a failed ' .. failure .. ' and retries.', function()
+            local fs = require('fundo.fs')
+            open_file_with_history({'one'}, {'two'})
+            edit_and_write({'three'})
+            local u = manager:get(api.nvim_get_current_buf())
+            local originalOpen = fs.openSync
+            local originalStat = fs.fstatSync
+            local originalRead = fs.readSync
+            local temporary, descriptor
+            fs.openSync = function(filename, flags, mode)
+                temporary = filename
+                descriptor = originalOpen(filename, flags, mode)
+                return descriptor
+            end
+            if failure == 'stat' then
+                fs.fstatSync = function() return nil, 'injected stat failure' end
+            elseif failure == 'read' then
+                fs.readSync = function() error('injected read failure') end
+            else
+                fs.readSync = function() return '' end
+            end
+
+            local ok, err = pcall(u.transferSync, u)
+            fs.openSync = originalOpen
+            fs.fstatSync = originalStat
+            fs.readSync = originalRead
+            local stillOpen = originalStat(descriptor)
+            if stillOpen then fs.closeSync(descriptor) end
+            local temporaryExists = fs.statSync(temporary)
+            fs.unlinkSync(temporary)
+
+            assert.False(ok)
+            local expected = failure == 'short read' and 'incomplete undo snapshot'
+                or 'injected ' .. failure .. ' failure'
+            assert.truthy(tostring(err):find(expected, 1, true))
+            assert.falsy(stillOpen)
+            assert.falsy(temporaryExists)
+            assert.same({'two'}, fn.readfile(u.fallbackPath))
+            sync_all()
+            vim.cmd('bwipeout!')
+            external_write({'external', 'change'})
+            vim.cmd('edit ' .. fn.fnameescape(file))
+            assert_history_restores_to({'three'})
+        end)
+    end
+
     it('retries a detached snapshot after the source has disappeared.', function()
         local fs = require('fundo.fs')
         local writeFileSync = fs.writeFileSync
