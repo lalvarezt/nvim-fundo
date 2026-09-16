@@ -161,4 +161,11 @@ function M.write(transfer)
     return manifestPath
 end
 
+function M.remove(fallbackPath)
+    local removed, err, code = fs.unlinkSync(M.path(fallbackPath))
+    if not removed and code ~= 'ENOENT' then
+        error(err)
+    end
+end
+
 return M

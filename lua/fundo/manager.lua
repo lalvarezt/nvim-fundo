@@ -74,6 +74,9 @@ function Manager:attach(bufnr)
                 -- The buffer may have changed while Fundo was disabled. Capture
                 -- its current history before retrying the older detached copy.
                 u:reset(true)
+                if not vim.bo[bufnr].modified and u:isEmpty() then
+                    u.pendingRecovery = self.pendingTransfers[u.fallbackPath]
+                end
             end
             self.undos[bufnr] = u
             log.debug('attached buffer:', bufnr, bufferName(bufnr))
@@ -121,18 +124,20 @@ function Manager:scanArchivesDir()
                 records[name] = record
             end
         end
-        for _, record in pairs(records) do
-            if record.fallback or record.baseline then
-                local fallbackPath = path.join(self.archivesDir, record.name)
-                local manifestPath = manifest.path(fallbackPath)
-                local manifestStat = fs.statSync(manifestPath)
-                if manifestStat then
+        local metadataDir = manifest.dir(self.archivesDir)
+        if fs.statSync(metadataDir) then
+            local metadataStats = await(self:listFileStats(metadataDir, 1024))
+            for name, stat in pairs(metadataStats) do
+                if name:sub(-5) == '.json' then
+                    local key = name:sub(1, -6)
+                    local record = records[key] or {name = key}
                     record.manifest = {
-                        path = manifestPath,
-                        mtime = manifestStat.mtime.sec,
-                        size = manifestStat.size,
+                        path = path.join(metadataDir, name),
+                        mtime = stat.mtime.sec,
+                        size = stat.size,
                     }
-                    record.mtime = math.max(record.mtime or 0, manifestStat.mtime.sec)
+                    record.mtime = math.max(record.mtime or 0, stat.mtime.sec)
+                    records[key] = record
                 end
             end
         end
@@ -342,6 +347,11 @@ function Manager:initialize()
         local u = self:attach(bufnr)
         if u then
             u:check()
+            if not u.pendingRecovery and not vim.bo[bufnr].modified and not u:isEmpty() then
+                -- Explicit reloads can retain native undo without emitting
+                -- FileChangedShellPost. Persist the matching buffer text too.
+                u:reset(true)
+            end
         end
     end, self.disposables)
     event:on('FileChangedShellPost', function(bufnr)
@@ -349,7 +359,7 @@ function Manager:initialize()
         local u = self.undos[bufnr]
         if u then
             u:check()
-            if not vim.bo[bufnr].modified and not u:isEmpty() then
+            if not u.pendingRecovery and not vim.bo[bufnr].modified and not u:isEmpty() then
                 -- Neovim can preserve the tree itself on reload. Its new file
                 -- contents still need a matching fallback before the next save.
                 u:reset(true)

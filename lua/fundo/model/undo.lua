@@ -259,10 +259,15 @@ function Undo:saveBaseline()
     local ok, err = pcall(function()
         if not selected then
             self:deleteBaseline()
-            return
+            stage = 'manifest'
+            if not fs.statSync(self.fallbackPath) then
+                manifest.remove(self.fallbackPath)
+                return
+            end
+        else
+            fs.mkdirpSync(path.dirname(self.baselinePath), archiveDirMode)
+            fs.writeFileSync(self.baselinePath, contents)
         end
-        fs.mkdirpSync(path.dirname(self.baselinePath), archiveDirMode)
-        fs.writeFileSync(self.baselinePath, contents)
         stage = 'manifest'
         local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
         manifest.write({
@@ -271,7 +276,7 @@ function Undo:saveBaseline()
             fallbackPath = self.fallbackPath,
             baselinePath = self.baselinePath,
             snapshot_format = record and record.snapshot_format,
-            baseline_format = 'buffer-lines-v1',
+            baseline_format = selected and 'buffer-lines-v1' or nil,
         })
     end)
     if not ok then
@@ -377,7 +382,11 @@ function Undo:readBaseline()
         log.trace('readBaseline skipped; baseline missing:', self.baselinePath or '')
         return
     end
-    local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+    local record, recordErr = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+    if recordErr and recordErr ~= 'missing' then
+        pcall(log.warn, 'invalid baseline metadata:', self.baselinePath, recordErr)
+        return
+    end
     local normalized = record and (record.baseline_format or record.snapshot_format) == 'buffer-lines-v1'
     local ok, lines
     if normalized then
@@ -472,7 +481,8 @@ function Undo:loadFileAndUndo(winid)
     local ok, err = pcall(function()
         local modified = vim.bo[self.bufnr].modified
         local lines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
-        local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+        local record, recordErr = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+        if recordErr and recordErr ~= 'missing' then error(recordErr) end
         if record and record.snapshot_format == 'buffer-lines-v1' then
             local archived = readSnapshot(self.fallbackPath)
             api.nvim_buf_set_lines(self.bufnr, 0, -1, false, archived)
@@ -620,6 +630,12 @@ function Undo:transferSync()
         log.debug('transferSync skipped:', self.bufnr, self.name or '')
         return
     end
+    if self.pendingRecovery then
+        self:check()
+        if self.pendingRecovery then
+            error(self.lastError and self.lastError.message or 'pending history could not be recovered', 0)
+        end
+    end
     if self:isEmpty() then
         local _, err = self:saveBaseline()
         if err then error(err, 0) end
@@ -658,8 +674,29 @@ function Undo:check()
         or undoDisabled(self.bufnr) then
         return
     end
+    if self.pendingRecovery then
+        local ok, err = pcall(Undo.completePendingTransferSync, self.pendingRecovery)
+        if not ok then
+            self.lastError = self.pendingRecovery.lastError
+            pcall(log.warn, 'failed to publish pending recovery:', self.name, err)
+            return
+        end
+        local loaded, reason = self:loadFallBack()
+        if not loaded then
+            self.lastError = transferError('undo', reason)
+            return
+        end
+        self.pendingRecovery = nil
+        self.lastError = nil
+        return
+    end
     if not self:isEmpty() then
         log.trace('check skipped; undo tree is not empty:', self.bufnr, self.name or '')
+        return
+    end
+    local _, recordErr = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+    if recordErr and recordErr ~= 'missing' then
+        pcall(log.warn, 'invalid recovery metadata:', self.name, recordErr)
         return
     end
     log.trace('check started:', self.bufnr, self.name or '')

@@ -344,24 +344,26 @@ describe('closed Neovim sessions.', function()
         assert_linear_recovery('external|change')
     end)
 
-    it('persists native reload history before a later external change while closed.', function()
-        fn.writefile({'one'}, file)
-        run([[
-            vim.o.undoreload = 10000
-            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
-            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
-            vim.cmd('write')
-            require('fundo.manager'):syncAllSync()
-            vim.fn.writefile({'one', 'two', 'three'}, FILE)
-            vim.cmd('checktime')
-            assert(BufferText() == 'one|two|three')
-            assert(not vim.bo.modified)
-            vim.cmd('quitall!')
-        ]])
+    for _, reload in ipairs({'checktime', 'edit!'}) do
+        it('persists native reload history after ' .. reload .. ' before a later external change.', function()
+            fn.writefile({'one'}, file)
+            run(([[
+                vim.o.undoreload = 10000
+                vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+                vim.api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
+                vim.cmd('write')
+                require('fundo.manager'):syncAllSync()
+                vim.fn.writefile({'one', 'two', 'three'}, FILE)
+                vim.cmd(%q)
+                assert(BufferText() == 'one|two|three')
+                assert(not vim.bo.modified)
+                vim.cmd('quitall!')
+            ]]):format(reload))
 
-        fn.writefile({'external', 'change'}, file)
-        assert_linear_recovery('external|change')
-    end)
+            fn.writefile({'external', 'change'}, file)
+            assert_linear_recovery('external|change')
+        end)
+    end
 
     for _, operation in ipairs({'delete', 'rename'}) do
         it('persists undo on exit after the open file is externally ' .. operation .. 'd.', function()
