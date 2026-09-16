@@ -4,13 +4,21 @@ Run `make test` and `make lint` from the repository. The tests use isolated
 files and archive directories. The session specs launch clean child Neovim
 processes to verify persistence across an actual exit and restart.
 
-The latest correctness review started with 180 passing tests on Neovim 0.12.5.
-New regression tests reproduced the failures before their fixes.
-The completed suite passes all 191 tests, and `make lint` reports no problems
-on Neovim 0.12.5. Only the latest stable Neovim release is supported.
+Regression tests reproduce the reported failures before their fixes. Run the
+commands above for the current test count and lint results. Validation uses
+Neovim 0.12.5. Only the latest stable Neovim release is supported.
 
 The review corrected these cases:
 
+- Detached pending history is recovered after an external change before the
+  reopened buffer replaces its snapshot. Tests cover synchronous and asynchronous
+  retries, continued storage failures, and recovery in a subsequent process.
+- Explicit `:edit!` reloads persist native undo history, as `:checktime` reloads do.
+- Invalid metadata and unsupported snapshot formats prevent recovery from
+  guessing a decoder. Tests preserve a literal leading U+FEFF in the baseline.
+- Disabling baselines removes metadata for baseline-only records and updates
+  records with a retained fallback. Orphan metadata is subject to retention and
+  size limits. Metadata write and deletion failures remain retryable.
 - After `:checktime`, Neovim can retain its native undo tree while changing the
   buffer text. Fundo now marks that state for persistence so the fallback still
   matches after exit. A test uses separate Neovim sessions and verifies undo and

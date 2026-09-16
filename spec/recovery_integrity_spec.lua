@@ -92,7 +92,10 @@ describe('recovery integrity.', function()
         end)
     end
 
-    for _, corruption in ipairs({'malformed', 'unsupported-version', 'wrong-path'}) do
+    for _, corruption in ipairs({
+        'malformed', 'unsupported-version', 'wrong-path',
+        'unknown-baseline-format', 'unknown-snapshot-format', 'invalid-format-type',
+    }) do
         it('rejects ' .. corruption .. ' metadata without guessing the baseline format.', function()
             local lines = run(([=[
                 local api, fn = vim.api, vim.fn
@@ -113,6 +116,15 @@ describe('recovery integrity.', function()
                     invalid = fn.json_encode(record)
                 elseif corruption == 'wrong-path' then
                     record.fallback.path = u.fallbackPath .. '.different'
+                    invalid = fn.json_encode(record)
+                elseif corruption == 'unknown-baseline-format' then
+                    record.baseline_format = 'buffer-lines-v2'
+                    invalid = fn.json_encode(record)
+                elseif corruption == 'unknown-snapshot-format' then
+                    record.snapshot_format = 'buffer-lines-v2'
+                    invalid = fn.json_encode(record)
+                elseif corruption == 'invalid-format-type' then
+                    record.baseline_format = false
                     invalid = fn.json_encode(record)
                 end
                 fs.writeFileSync(metadata, invalid)

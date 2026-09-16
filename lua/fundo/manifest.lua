@@ -113,6 +113,11 @@ function M.validate(value, expectedFallbackPath)
     if value.version ~= M.version then
         return false, ('unsupported manifest version: %s'):format(tostring(value.version))
     end
+    for _, field in ipairs({'snapshot_format', 'baseline_format'}) do
+        if value[field] ~= nil and value[field] ~= 'buffer-lines-v1' then
+            return false, ('unsupported %s: %s'):format(field, tostring(value[field]))
+        end
+    end
     if type(value.updated_at) ~= 'number' then
         return false, 'manifest update time is missing'
     end
