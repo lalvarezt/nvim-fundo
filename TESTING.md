@@ -13,6 +13,11 @@ The review corrected these cases:
 - Detached pending history is recovered after an external change before the
   reopened buffer replaces its snapshot. Tests cover synchronous and asynchronous
   retries, continued storage failures, and recovery in a subsequent process.
+  Recovery uses a private temporary undo file independently of archive writes,
+  so edits made during an archive outage extend the recovered tree. Tests cover
+  saved and unsaved edits, wipe/reopen, `:file`, `:saveas`, and another process.
+  If temporary recovery fails and new edits arrive, sync refuses to replace the
+  local tree and retains the pending snapshot for the active buffer.
 - Explicit `:edit!` reloads persist native undo history, as `:checktime` reloads do.
 - Invalid metadata and unsupported snapshot formats prevent recovery from
   guessing a decoder. Tests preserve a literal leading U+FEFF in the baseline.

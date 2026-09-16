@@ -187,9 +187,9 @@ function Undo:isEmpty()
     return not res:match('^number')
 end
 
-function Undo:loadUndo()
+function Undo:loadUndo(filename)
     local ok, err = utils.bufCall(self.bufnr, function()
-        return pcall(cmd, 'sil rundo ' .. fn.fnameescape(self.undoPath))
+        return pcall(cmd, 'sil rundo ' .. fn.fnameescape(filename or self.undoPath))
     end)
     if ok then
         log.debug('loaded undo file:', self.undoPath)
@@ -468,7 +468,7 @@ function Undo:loadBaseline()
     return true
 end
 
-function Undo:loadFileAndUndo(winid)
+function Undo:loadFileAndUndo(winid, transfer)
     log.debug('loading fallback and undo:', 'fallback:', self.fallbackPath, 'undo:', self.undoPath, 'winid:', winid)
     local view
     if winid then
@@ -478,24 +478,43 @@ function Undo:loadFileAndUndo(winid)
     local ei = vim.o.eventignore
     vim.o.eventignore = 'all'
     local missingUndo = false
+    local temporary
     local ok, err = pcall(function()
         local modified = vim.bo[self.bufnr].modified
         local lines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
-        local record, recordErr = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
-        if recordErr and recordErr ~= 'missing' then error(recordErr) end
-        if record and record.snapshot_format == 'buffer-lines-v1' then
-            local archived = readSnapshot(self.fallbackPath)
+        if transfer then
+            -- Recovery must not depend on publishing to an unavailable archive.
+            -- writefile's binary list representation maps embedded NUL to NL.
+            temporary = fn.tempname()
+            local fd, openErr = fs.openSync(temporary, 'wx', 384) -- 0o600
+            if not fd then error(openErr) end
+            local closed, closeErr = fs.closeSync(fd)
+            if not closed then error(closeErr) end
+            local undoLines = vim.split(transfer.undoContents, '\n', {plain = true})
+            for i, line in ipairs(undoLines) do undoLines[i] = line:gsub('%z', '\n') end
+            if fn.writefile(undoLines, temporary, 'b') ~= 0 then
+                error('failed to write temporary recovery undo file')
+            end
+            local archived = vim.split(transfer.contents, '\n', {plain = true})
+            table.remove(archived)
             api.nvim_buf_set_lines(self.bufnr, 0, -1, false, archived)
         else
-            utils.bufCall(self.bufnr, function()
-                cmd(([[
-                keepalt sil %dread %s
-                keepj sil 1,%ddelete_
-            ]]):format(#lines, fn.fnameescape(self.fallbackPath), #lines))
-            end)
+            local record, recordErr = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+            if recordErr and recordErr ~= 'missing' then error(recordErr) end
+            if record and record.snapshot_format == 'buffer-lines-v1' then
+                local archived = readSnapshot(self.fallbackPath)
+                api.nvim_buf_set_lines(self.bufnr, 0, -1, false, archived)
+            else
+                utils.bufCall(self.bufnr, function()
+                    cmd(([[
+                    keepalt sil %dread %s
+                    keepj sil 1,%ddelete_
+                ]]):format(#lines, fn.fnameescape(self.fallbackPath), #lines))
+                end)
+            end
         end
-        missingUndo = not fs.statSync(self.undoPath)
-        local undoOk, undoErr = self:loadUndo()
+        missingUndo = not fs.statSync(temporary or self.undoPath)
+        local undoOk, undoErr = self:loadUndo(temporary)
         if not undoOk then
             api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
             vim.bo[self.bufnr].modified = modified
@@ -506,12 +525,17 @@ function Undo:loadFileAndUndo(winid)
             error(undoErr or ('failed to load undo file: ' .. self.undoPath))
         end
         api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
+        -- Keep subsequent edits separate from the recovered external change.
+        utils.bufCall(self.bufnr, function()
+            cmd('let &l:undolevels = &l:undolevels')
+        end)
         vim.bo[self.bufnr].modified = modified
 
         if winid then
             utils.restView(winid, view)
         end
     end)
+    if temporary then pcall(fs.unlinkSync, temporary) end
     vim.o.eventignore = ei
     if not ok then
         pcall(log.warn, 'failed to load fallback archive:', self.fallbackPath, err)
@@ -524,8 +548,8 @@ function Undo:loadFileAndUndo(winid)
     return true
 end
 
-function Undo:loadFallBack()
-    if not fs.statSync(self.fallbackPath) then
+function Undo:loadFallBack(transfer)
+    if not transfer and not fs.statSync(self.fallbackPath) then
         log.trace('loadFallBack skipped; fallback missing:', self.fallbackPath)
         return false, 'missing-fallback'
     end
@@ -533,20 +557,20 @@ function Undo:loadFallBack()
     local reason
     local preferredWinid, winids = utils.getWinByBuf(self.bufnr)
     if preferredWinid == -1 then
-        loaded, reason = self:loadFileAndUndo()
+        loaded, reason = self:loadFileAndUndo(nil, transfer)
     elseif winids then
         local views = {}
         for _, winid in ipairs(winids) do
             views[winid] = utils.saveView(winid)
         end
-        loaded, reason = self:loadFileAndUndo(preferredWinid)
+        loaded, reason = self:loadFileAndUndo(preferredWinid, transfer)
         for winid, view in pairs(views) do
             if utils.isWinValid(winid) then
                 pcall(utils.restView, winid, view)
             end
         end
     else
-        loaded, reason = self:loadFileAndUndo(preferredWinid)
+        loaded, reason = self:loadFileAndUndo(preferredWinid, transfer)
     end
     if loaded then
         -- The buffer now contains the externally changed file with the restored
@@ -675,13 +699,11 @@ function Undo:check()
         return
     end
     if self.pendingRecovery then
-        local ok, err = pcall(Undo.completePendingTransferSync, self.pendingRecovery)
-        if not ok then
-            self.lastError = self.pendingRecovery.lastError
-            pcall(log.warn, 'failed to publish pending recovery:', self.name, err)
+        if not self:isEmpty() then
+            self.lastError = transferError('undo', 'pending recovery would replace newer undo history')
             return
         end
-        local loaded, reason = self:loadFallBack()
+        local loaded, reason = self:loadFallBack(self.pendingRecovery)
         if not loaded then
             self.lastError = transferError('undo', reason)
             return

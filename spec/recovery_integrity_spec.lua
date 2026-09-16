@@ -59,7 +59,7 @@ describe('recovery integrity.', function()
                 if %s then
                     assert(not sync())
                     assert(vim.tbl_count(manager.pendingTransfers) == 1)
-                    assert(BufferText() == 'outside' and EntryCount() == 0)
+                    assert(BufferText() == 'outside' and EntryCount() > 0)
                     fs.writeFileSync = originalWrite
                 end
                 assert(sync())
@@ -91,6 +91,126 @@ describe('recovery integrity.', function()
             assert.same({'outside', 'three', 'later'}, lines)
         end)
     end
+
+    for _, mode in ipairs({'sync', 'async'}) do
+        for _, operation in ipairs({'write', 'modified', 'wipeout', 'file', 'saveas'}) do
+            it('preserves edits during blocked recovery with ' .. mode .. ' and ' .. operation .. '.', function()
+                local lines = run(([=[
+                    local api, fn = vim.api, vim.fn
+                    local manager, fs = require('fundo.manager'), require('fundo.fs')
+                    fn.writefile({'one'}, FILE)
+                    vim.cmd('edit ' .. fn.fnameescape(FILE))
+                    api.nvim_buf_set_lines(0, 0, -1, false, {'two'})
+                    vim.cmd('write')
+                    assert(manager:syncAllSync())
+                    api.nvim_buf_set_lines(0, 0, -1, false, {'three'})
+                    vim.cmd('write')
+                    local write = fs.writeFileSync
+                    fs.writeFileSync = function() error('archive unavailable') end
+                    vim.cmd('bwipeout!')
+                    fn.writefile({'outside'}, FILE)
+                    vim.cmd('edit ' .. fn.fnameescape(FILE))
+                    api.nvim_buf_set_lines(0, 0, -1, false, {'edit1'})
+                    vim.cmd('write')
+                    vim.cmd('let &undolevels = &undolevels')
+                    api.nvim_buf_set_lines(0, 0, -1, false, {'edit2'})
+                    local operation, mode = %q, %q
+                    if operation ~= 'modified' then vim.cmd('write') end
+                    local target = FILE
+                    if operation == 'file' or operation == 'saveas' then
+                        target = FILE .. '.renamed'
+                        vim.cmd(operation .. ' ' .. fn.fnameescape(target))
+                    elseif operation == 'wipeout' then
+                        vim.cmd('bwipeout!')
+                        vim.cmd('edit ' .. fn.fnameescape(FILE))
+                    end
+                    fs.writeFileSync = write
+                    if mode == 'sync' then
+                        assert(manager:syncAllSync())
+                    else
+                        local done, failure
+                        require('fundo').sync():thenCall(function() done = true end, function(err)
+                            failure, done = err, true
+                        end)
+                        assert(vim.wait(1000, function() return done end))
+                        assert(not failure, tostring(failure))
+                    end
+                    assert(vim.tbl_count(manager.pendingTransfers) == 0)
+                    assert(vim.bo.modified == (operation == 'modified'))
+                    assert(fn.readfile(FILE)[1] == (operation == 'modified' and 'edit1' or 'edit2'))
+                    local report = {BufferText()}
+                    for _ = 1, 4 do
+                        vim.cmd('undo')
+                        table.insert(report, BufferText())
+                    end
+                    for _ = 1, 4 do vim.cmd('redo') end
+                    table.insert(report, BufferText())
+                    WriteReport(report)
+                    vim.cmd('quitall!')
+                ]=]):format(operation, mode))
+                assert.same({'edit2', 'edit1', 'outside', 'three', 'two', 'edit2'}, lines)
+
+                local renamed = operation == 'file' or operation == 'saveas'
+                fn.writefile({'later'}, tmpdir .. '/source' .. (renamed and '.renamed' or ''))
+                lines = run(([[
+                    local target = FILE .. %q
+                    vim.cmd('edit ' .. vim.fn.fnameescape(target))
+                    local report = {BufferText()}
+                    for _ = 1, 5 do
+                        vim.cmd('undo')
+                        table.insert(report, BufferText())
+                    end
+                    WriteReport(report)
+                    vim.cmd('quitall!')
+                ]]):format(renamed and '.renamed' or ''))
+                assert.same({'later', 'edit2', 'edit1', 'outside', 'three', 'two'}, lines)
+            end)
+        end
+    end
+
+    it('keeps both histories untouched when temporary recovery fails before local edits.', function()
+        local lines = run([[
+            local api, fn = vim.api, vim.fn
+            local manager, fs = require('fundo.manager'), require('fundo.fs')
+            fn.writefile({'one'}, FILE)
+            vim.cmd('edit ' .. fn.fnameescape(FILE))
+            api.nvim_buf_set_lines(0, 0, -1, false, {'two'})
+            vim.cmd('write')
+            assert(manager:syncAllSync())
+            api.nvim_buf_set_lines(0, 0, -1, false, {'three'})
+            vim.cmd('write')
+            local write = fs.writeFileSync
+            fs.writeFileSync = function() error('archive unavailable') end
+            vim.cmd('bwipeout!')
+            fn.writefile({'outside'}, FILE)
+            local writefile = fn.writefile
+            fn.writefile = function(_, _, flags)
+                assert(flags == 'b')
+                error('temporary storage unavailable')
+            end
+            vim.cmd('edit ' .. fn.fnameescape(FILE))
+            fn.writefile = writefile
+            assert(BufferText() == 'outside' and EntryCount() == 0)
+            local pending = vim.tbl_values(manager.pendingTransfers)[1]
+            assert(pending.contents == 'three\n')
+            api.nvim_buf_set_lines(0, 0, -1, false, {'edit1'})
+            vim.cmd('write')
+            vim.cmd('let &undolevels = &undolevels')
+            api.nvim_buf_set_lines(0, 0, -1, false, {'edit2'})
+            vim.cmd('write')
+            fs.writeFileSync = write
+            assert(not manager:syncAllSync())
+            assert(vim.tbl_values(manager.pendingTransfers)[1] == pending)
+            local report = {BufferText()}
+            vim.cmd('undo')
+            table.insert(report, BufferText())
+            vim.cmd('undo')
+            table.insert(report, BufferText())
+            WriteReport(report)
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'edit2', 'edit1', 'outside'}, lines)
+    end)
 
     for _, corruption in ipairs({
         'malformed', 'unsupported-version', 'wrong-path',

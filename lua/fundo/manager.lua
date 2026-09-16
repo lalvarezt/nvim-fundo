@@ -293,7 +293,16 @@ function Manager:syncAllSync()
         end
     end
     for key, transfer in pairs(self.pendingTransfers) do
-        local ok, err = pcall(undo.completePendingTransferSync, transfer)
+        local recovering = false
+        for _, u in pairs(self.undos) do
+            if u.pendingRecovery == transfer then recovering = true end
+        end
+        local ok, err
+        if recovering then
+            err = 'pending snapshot still requires recovery into its buffer'
+        else
+            ok, err = pcall(undo.completePendingTransferSync, transfer)
+        end
         if ok then
             self.pendingTransfers[key] = nil
             for _, u in pairs(self.undos) do
