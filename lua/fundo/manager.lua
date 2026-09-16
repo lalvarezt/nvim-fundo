@@ -70,6 +70,11 @@ function Manager:attach(bufnr)
     if not self.undos[bufnr] then
         local u = undo:new(bufnr, self.archivesDir)
         if u:attach() then
+            if self.pendingTransfers[u.fallbackPath] then
+                -- The buffer may have changed while Fundo was disabled. Capture
+                -- its current history before retrying the older detached copy.
+                u:reset(true)
+            end
             self.undos[bufnr] = u
             log.debug('attached buffer:', bufnr, bufferName(bufnr))
         else
@@ -276,7 +281,8 @@ function Manager:syncAllSync()
         if not ok then
             if u.pendingTransfer then
                 self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
-            else
+            end
+            if not u.pendingTransfer or u.lastError then
                 table.insert(failures, ('buffer %s: %s'):format(bufnr, tostring(err)))
             end
         end
@@ -285,6 +291,9 @@ function Manager:syncAllSync()
         local ok, err = pcall(undo.completePendingTransferSync, transfer)
         if ok then
             self.pendingTransfers[key] = nil
+            for _, u in pairs(self.undos) do
+                u:finishTransfer(transfer)
+            end
         else
             table.insert(failures, ('pending %s: %s'):format(key, tostring(err)))
         end
@@ -319,11 +328,13 @@ function Manager:initialize()
     table.insert(self.disposables, disposable:create(function()
         log.debug('disposing manager:', 'attached_buffers:', vim.tbl_count(self.undos))
         for _, b in pairs(self.undos) do
+            if b.pendingTransfer then
+                self.pendingTransfers[b.pendingTransfer.fallbackPath] = b.pendingTransfer
+            end
             b:dispose()
         end
         self.initialized = false
         self.undos = {}
-        self.pendingTransfers = {}
         self.lastScannedtime = 0
     end))
     event:on('BufReadPost', function(bufnr)
@@ -338,6 +349,11 @@ function Manager:initialize()
         local u = self.undos[bufnr]
         if u then
             u:check()
+            if not vim.bo[bufnr].modified and not u:isEmpty() then
+                -- Neovim can preserve the tree itself on reload. Its new file
+                -- contents still need a matching fallback before the next save.
+                u:reset(true)
+            end
         end
     end, self.disposables)
     event:on('BufNewFile', function(bufnr)
@@ -347,8 +363,7 @@ function Manager:initialize()
     event:on('BufFilePost', function(bufnr)
         local u = self.undos[bufnr]
         if u then
-            u:dispose()
-            self.undos[bufnr] = nil
+            self:detach(bufnr)
         end
         u = self:attach(bufnr)
         if u then u:reset(true) end

@@ -77,7 +77,11 @@ local function reload()
         error('baseline_max_file_size must be greater than or equal to zero', 3)
     end
     validateLogging(resolved.logging)
-    Config.archives_dir = vim.fn.expand(resolved.archives_dir)
+    local archivesDir = path.normalize(vim.fn.fnamemodify(vim.fn.expand(resolved.archives_dir), ':p'))
+    if archivesDir ~= path.sep and not archivesDir:match('^%a:' .. path.sep .. '$') then
+        archivesDir = archivesDir:gsub(path.sep .. '+$', '')
+    end
+    Config.archives_dir = archivesDir
     Config.limit_archives_size = resolved.limit_archives_size
     Config.baseline_max_file_size = resolved.baseline_max_file_size
     Config.retention_days = resolved.retention_days

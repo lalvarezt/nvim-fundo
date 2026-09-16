@@ -4,8 +4,32 @@ Run `make test` and `make lint` from the repository. The tests use isolated
 files and archive directories. The session specs launch clean child Neovim
 processes to verify persistence across an actual exit and restart.
 
-The audit started with 126 passing tests. Regression tests reproduced failures
-before the fixes. The resulting suite has 156 passing tests on Neovim 0.12.5.
+The latest correctness review started with 180 passing tests on Neovim 0.12.5.
+New regression tests reproduced the failures before their fixes.
+The completed suite passes all 191 tests, and `make lint` reports no problems
+on Neovim 0.12.5. Only the latest stable Neovim release is supported.
+
+The review corrected these cases:
+
+- After `:checktime`, Neovim can retain its native undo tree while changing the
+  buffer text. Fundo now marks that state for persistence so the fallback still
+  matches after exit. A test uses separate Neovim sessions and verifies undo and
+  redo after another external change.
+- Failed snapshots survive disabling and re-enabling Fundo and explicit buffer
+  renames. Successful synchronous retries also clear the active buffer's pending
+  state. The tests inject write failures and verify subsequent recovery.
+- Edits saved while Fundo is disabled take precedence over older pending
+  snapshots when Fundo is re-enabled. The regression verifies the saved archive
+  and undo recovery after a later external change.
+- Failed baseline deletion reports a baseline-stage error and remains retryable.
+  The tests cover buffers with and without native undo history.
+- Configuration resolves the archive directory to an absolute path. Changing
+  the working directory no longer changes its destination, and a trailing
+  separator no longer allows Fundo to track its own archive files.
+
+The corrupted native undo test also verifies recovery after Neovim reports
+`E823`: current text remains intact, undo restores the baseline, and redo restores
+the current text.
 
 | Area | Cases checked |
 | --- | --- |
@@ -45,6 +69,5 @@ an archive failure.
 Arbitrary external moves remain outside automatic recovery. After moving an
 open file, `:file new-path` associates its buffer and history with the new path.
 Opening only a previously unknown destination after a closed-session move does
-not locate the old archive. Windows, older Neovim releases, concurrent editor
-processes writing the same record, and sudden power loss were not validated by
-this run.
+not locate the old archive. Windows, concurrent editor processes writing the
+same record, and sudden power loss were not validated by this run.

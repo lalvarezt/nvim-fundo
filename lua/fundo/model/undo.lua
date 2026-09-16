@@ -241,15 +241,11 @@ function Undo:canSaveBaseline(stat)
 end
 
 function Undo:deleteBaseline()
-    if not self.baselinePath or not fs.statSync(self.baselinePath) then
-        return
+    local removed, err, code = fs.unlinkSync(self.baselinePath)
+    if not removed and code ~= 'ENOENT' then
+        error(err)
     end
-    local ok, err = pcall(fs.unlinkSync, self.baselinePath)
-    if not ok then
-        pcall(log.warn, 'failed to delete baseline archive:', self.baselinePath, err)
-    else
-        log.debug('deleted baseline archive:', self.baselinePath)
-    end
+    log.debug('deleted baseline archive:', self.baselinePath)
 end
 
 function Undo:saveBaseline()
@@ -258,13 +254,13 @@ function Undo:saveBaseline()
         return false
     end
     local contents = bufferContents(self.bufnr)
-    if not self:canSaveBaseline({type = 'file', size = #contents}) then
-        self:deleteBaseline()
-        self.lastError = nil
-        return false
-    end
+    local selected = self:canSaveBaseline({type = 'file', size = #contents})
     local stage = 'baseline'
     local ok, err = pcall(function()
+        if not selected then
+            self:deleteBaseline()
+            return
+        end
         fs.mkdirpSync(path.dirname(self.baselinePath), archiveDirMode)
         fs.writeFileSync(self.baselinePath, contents)
         stage = 'manifest'
@@ -284,14 +280,14 @@ function Undo:saveBaseline()
         return false, err
     end
     self.lastError = nil
-    log.debug('saved baseline archive:', self.baselinePath)
-    return true
+    if selected then log.debug('saved baseline archive:', self.baselinePath) end
+    return selected
 end
 
 local function saveBaselineSnapshot(transfer)
     local limit = config.baseline_max_file_size * 1024 * 1024
     if limit <= 0 or #transfer.contents > limit then
-        pcall(fs.unlinkSync, transfer.baselinePath)
+        Undo.deleteBaseline(transfer)
         return false
     end
     fs.mkdirpSync(path.dirname(transfer.baselinePath), archiveDirMode)
@@ -639,7 +635,14 @@ function Undo:transferSync()
     self.lastError = nil
     self.pendingTransfer = transfer
     Undo.completePendingTransferSync(transfer)
+    self:finishTransfer(transfer)
+end
+
+function Undo:finishTransfer(transfer)
+    if self.pendingTransfer ~= transfer then return end
     self.pendingTransfer = nil
+    -- Retrying an older snapshot does not resolve a newer capture failure.
+    if self.lastError then return end
     self.isDirty = false
     self.lastAction = 'transferred'
     self.lastUpdated = os.time()

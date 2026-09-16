@@ -344,6 +344,25 @@ describe('closed Neovim sessions.', function()
         assert_linear_recovery('external|change')
     end)
 
+    it('persists native reload history before a later external change while closed.', function()
+        fn.writefile({'one'}, file)
+        run([[
+            vim.o.undoreload = 10000
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
+            vim.cmd('write')
+            require('fundo.manager'):syncAllSync()
+            vim.fn.writefile({'one', 'two', 'three'}, FILE)
+            vim.cmd('checktime')
+            assert(BufferText() == 'one|two|three')
+            assert(not vim.bo.modified)
+            vim.cmd('quitall!')
+        ]])
+
+        fn.writefile({'external', 'change'}, file)
+        assert_linear_recovery('external|change')
+    end)
+
     for _, operation in ipairs({'delete', 'rename'}) do
         it('persists undo on exit after the open file is externally ' .. operation .. 'd.', function()
             fn.writefile({'one'}, file)
@@ -609,19 +628,25 @@ describe('closed Neovim sessions.', function()
                 'edit_ok=' .. tostring(edit_ok),
                 'edit_err=' .. tostring(edit_err),
             }
-            if edit_ok then
-                local before = BufferText()
-                local ok, err = pcall(vim.cmd, 'undo')
-                table.insert(out, 'before=' .. before)
-                table.insert(out, 'undo_ok=' .. tostring(ok))
-                table.insert(out, 'undo_err=' .. tostring(err))
-                table.insert(out, 'after=' .. BufferText())
-            end
+            table.insert(out, 'before=' .. BufferText())
+            local undo_ok, undo_err = pcall(vim.cmd, 'undo')
+            table.insert(out, 'undo_ok=' .. tostring(undo_ok))
+            table.insert(out, 'undo_err=' .. tostring(undo_err))
+            table.insert(out, 'after=' .. BufferText())
+            local redo_ok, redo_err = pcall(vim.cmd, 'redo')
+            table.insert(out, 'redo_ok=' .. tostring(redo_ok))
+            table.insert(out, 'redo_err=' .. tostring(redo_err))
+            table.insert(out, 'redo=' .. BufferText())
             WriteReport(out)
             vim.cmd('quitall!')
         ]]).lines)
         assert.equal('false', corruptUndo.edit_ok)
         assert.truthy(corruptUndo.edit_err:match('E823'))
+        assert.equal('external|corrupt-undo', corruptUndo.before)
+        assert.equal('true', corruptUndo.undo_ok)
+        assert.equal('one|two', corruptUndo.after)
+        assert.equal('true', corruptUndo.redo_ok)
+        assert.equal('external|corrupt-undo', corruptUndo.redo)
     end)
 
     it('recreates a missing fallback archive from native undo when the file is unchanged.', function()

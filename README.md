@@ -22,7 +22,7 @@ The goal of nvim-fundo is to make Neovim's undo file become stable and useful.
 
 ### Requirements
 
-- [Neovim](https://github.com/neovim/neovim) 0.7.2 or later
+- [Neovim](https://github.com/neovim/neovim/releases/latest) 0.12.5 or later. Only the latest stable release is supported.
 
 ### Installation
 

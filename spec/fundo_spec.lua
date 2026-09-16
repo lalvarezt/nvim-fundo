@@ -194,6 +194,137 @@ describe('fundo integration.', function()
         assert_history_restores_to({'three'})
     end)
 
+    it('captures writes made while disabled before retrying an older snapshot.', function()
+        open_file_with_history({'one'}, {'two'})
+        edit_and_write({'three'})
+        local fs = require('fundo.fs')
+        local originalWrite = fs.writeFileSync
+        rawset(fs, 'writeFileSync', function() error('disk unavailable') end)
+        require('fundo').disable()
+        rawset(fs, 'writeFileSync', originalWrite)
+        assert.equal(1, vim.tbl_count(manager.pendingTransfers))
+        edit_and_write({'four'})
+        require('fundo').enable()
+        sync_all()
+        local u = manager:get(api.nvim_get_current_buf())
+        assert.same({'four'}, fn.readfile(u.fallbackPath))
+        vim.cmd('bwipeout!')
+        external_write({'external', 'change'})
+        vim.cmd('edit ' .. fn.fnameescape(file))
+        assert_history_restores_to({'four'})
+    end)
+
+    for _, transition in ipairs({'disable', 'rename'}) do
+        it('retains failed snapshots across ' .. transition .. '.', function()
+            open_file_with_history({'one'}, {'two'})
+            edit_and_write({'three'})
+            local u = manager:get(api.nvim_get_current_buf())
+            local fs = require('fundo.fs')
+            local originalWrite = fs.writeFileSync
+            rawset(fs, 'writeFileSync', function() error('disk unavailable') end)
+            local saved = pcall(u.transferSync, u)
+            if transition == 'disable' then
+                require('fundo').disable()
+                vim.cmd('bwipeout!')
+            else
+                vim.cmd('file ' .. fn.fnameescape(file .. '.renamed'))
+            end
+            rawset(fs, 'writeFileSync', originalWrite)
+            assert.False(saved)
+            assert.truthy(manager.pendingTransfers[u.fallbackPath])
+            if transition == 'disable' then require('fundo').enable() end
+            sync_all()
+            assert.is_nil(manager.pendingTransfers[u.fallbackPath])
+            vim.cmd('bwipeout!')
+            external_write({'external', 'change'})
+            vim.cmd('edit ' .. fn.fnameescape(file))
+            assert_history_restores_to({'three'})
+        end)
+    end
+
+    it('clears active pending state after a synchronous retry succeeds.', function()
+        open_file_with_history({'one'}, {'two'})
+        edit_and_write({'three'})
+        local u = manager:get(api.nvim_get_current_buf())
+        local fs = require('fundo.fs')
+        local originalWrite = fs.writeFileSync
+        local failed = false
+        rawset(fs, 'writeFileSync', function(target, data, mode)
+            if not failed then
+                failed = true
+                error('transient write failure')
+            end
+            return originalWrite(target, data, mode)
+        end)
+        local saved = manager:syncAllSync()
+        rawset(fs, 'writeFileSync', originalWrite)
+        assert.True(saved)
+        assert.False(require('fundo').status(file).pending)
+        assert.is_nil(u.pendingTransfer)
+        assert.False(u.isDirty)
+    end)
+
+    it('reports a newer capture failure when an older snapshot retry succeeds.', function()
+        open_file_with_history({'one'}, {'two'})
+        edit_and_write({'three'})
+        local u = manager:get(api.nvim_get_current_buf())
+        local fs = require('fundo.fs')
+        local originalWrite = fs.writeFileSync
+        rawset(fs, 'writeFileSync', function() error('disk unavailable') end)
+        local saved = pcall(u.transferSync, u)
+        rawset(fs, 'writeFileSync', originalWrite)
+        assert.False(saved)
+        edit_and_write({'four'})
+        local originalSave = u.saveUndo
+        u.saveUndo = function() return false, 'newer capture failed' end
+        local ok, err = manager:syncAllSync()
+        u.saveUndo = originalSave
+        assert.False(ok)
+        assert.truthy(tostring(err):find('newer capture failed', 1, true))
+        assert.True(u.isDirty)
+        assert.is_nil(u.pendingTransfer)
+        assert.same({'three'}, fn.readfile(u.fallbackPath))
+        assert.equal('capture', require('fundo').status(file).last_error.stage)
+        sync_all()
+        assert.same({'four'}, fn.readfile(u.fallbackPath))
+        assert.is_nil(require('fundo').status(file).last_error)
+    end)
+
+    for _, history in ipairs({false, true}) do
+        it('reports failed baseline removal with history=' .. tostring(history) .. '.', function()
+            fn.writefile({'one'}, file)
+            vim.cmd('edit ' .. fn.fnameescape(file))
+            if history then
+                edit_and_write({'two'})
+                sync_all()
+            end
+            local u = manager:get(api.nvim_get_current_buf())
+            local fs = require('fundo.fs')
+            local config = require('fundo.config')
+            local originalUnlink = fs.unlinkSync
+            local originalLimit = config.baseline_max_file_size
+            config.baseline_max_file_size = 0
+            rawset(fs, 'unlinkSync', function(target)
+                if target == u.baselinePath then return nil, 'EACCES: baseline removal denied', 'EACCES' end
+                return originalUnlink(target)
+            end)
+            u:reset(true)
+            local ok, err = pcall(u.transferSync, u)
+            rawset(fs, 'unlinkSync', originalUnlink)
+            config.baseline_max_file_size = originalLimit
+            assert.False(ok)
+            assert.truthy(tostring(err):find('baseline removal denied', 1, true))
+            assert.equal('baseline', require('fundo').status(file).last_error.stage)
+
+            config.baseline_max_file_size = 0
+            local retried, retryErr = pcall(u.transferSync, u)
+            config.baseline_max_file_size = originalLimit
+            assert(retried, tostring(retryErr))
+            assert.equal(0, fn.filereadable(u.baselinePath))
+            assert.is_nil(require('fundo').status(file).last_error)
+        end)
+    end
+
     for _, lines in ipairs({{'', ''}, {'utf8: é 日本語', 'tail\r'}, {'nul\0byte', ''}}) do
         it('round trips buffer text ' .. vim.inspect(lines) .. ' through fallback and baseline.', function()
             open_file_with_history({'initial'}, lines)
