@@ -15,8 +15,19 @@ local log = require('fundo.lib.log')
 local path = require('fundo.fs.path')
 local mutex = require('fundo.lib.mutex')
 local manifest = require('fundo.manifest')
+local storage = require('fundo.storage')
 
 local archiveDirMode = 448 -- 0o700
+
+local function onMain(callback)
+    return promise(function(resolve, reject)
+        local function run()
+            local ok, result = pcall(callback)
+            if ok then resolve(result) else reject(result) end
+        end
+        if vim.in_fast_event() then vim.schedule(run) else run() end
+    end)
+end
 
 ---@class FundoManager
 ---@field initialized boolean
@@ -141,6 +152,14 @@ function Manager:scanArchivesDir()
                 end
             end
         end
+        local generations = await(onMain(function() return storage.records(self.archivesDir) end))
+        for _, generation in ipairs(generations) do
+            local key = generation.fallbackPath and path.basename(generation.fallbackPath)
+                or '@generation-' .. path.basename(generation.directory)
+            local record = records[key] or {name = key, mtime = generation.mtime}
+            record.generation = generation
+            records[key] = record
+        end
         local stats = vim.tbl_values(records)
         table.sort(stats, function(a, b)
             return a.mtime > b.mtime
@@ -161,6 +180,7 @@ function Manager:scanArchivesDir()
         for _, record in ipairs(stats) do
             local essentialSize = record.fallback and record.fallback.size or 0
             essentialSize = essentialSize + (record.manifest and record.manifest.size or 0)
+            essentialSize = essentialSize + (record.generation and record.generation.size or 0)
             if not record.fallback then
                 essentialSize = essentialSize + (record.baseline and record.baseline.size or 0)
             end
@@ -175,9 +195,29 @@ function Manager:scanArchivesDir()
                     end
                 end
             else
-                remove(record.fallback)
-                remove(record.baseline)
-                remove(record.manifest)
+                if record.generation and record.generation.error then
+                    local dir = record.generation.directory
+                    tasks[dir] = onMain(function() storage.removeInvalid(dir) end)
+                elseif record.generation then
+                    local fallbackPath = record.generation.fallbackPath
+                    tasks[fallbackPath] = onMain(function()
+                        storage.withLock(fallbackPath, function()
+                            if storage.token(fallbackPath) ~= record.generation.token then return end
+                            for _, artifact in ipairs({record.fallback or false, record.baseline or false, record.manifest or false}) do
+                                if artifact then
+                                    local target = artifact.path or path.join(self.archivesDir, artifact.name)
+                                    local deleted, failure, code = fs.unlinkSync(target)
+                                    if not deleted and code ~= 'ENOENT' then error(failure) end
+                                end
+                            end
+                            storage.remove(fallbackPath)
+                        end)
+                    end)
+                else
+                    remove(record.fallback)
+                    remove(record.baseline)
+                    remove(record.manifest)
+                end
             end
         end
         local results = await(promise.allSettled(tasks))
@@ -331,6 +371,7 @@ function Manager:initialize()
     if not utils.isWindows() then
         fs.chmodSync(self.archivesDir, archiveDirMode)
     end
+    storage.clean(self.archivesDir)
     self.undos = {}
     self.pendingTransfers = self.pendingTransfers or {}
     self.lastScannedtime = uv.hrtime()

@@ -342,11 +342,12 @@ describe('fundo integration.', function()
         end)
     end
 
-    it('leaves no synthetic undo entries after a corrupt fallback fails recovery.', function()
+    it('leaves no synthetic undo entries after a corrupt legacy fallback fails recovery.', function()
         open_file_with_history({'one'}, {'one', 'two'})
         local u = manager:get(api.nvim_get_current_buf())
         local fallbackPath, baselinePath = u.fallbackPath, u.baselinePath
         vim.cmd('bwipeout!')
+        require('fundo.storage').remove(fallbackPath)
         fn.writefile({'corrupt archive'}, fallbackPath)
         fn.delete(baselinePath)
         external_write({'external', 'change'})
@@ -1377,6 +1378,7 @@ describe('fundo integration.', function()
         for _, recordPath in ipairs(recordPaths) do
             assert.Nil(fs.statSync(recordPath))
         end
+        assert.Nil(fs.statSync(require('fundo.storage').directory(fallback)))
     end)
 
     it('prunes the oldest archive record when the size limit is exceeded.', function()
@@ -1412,10 +1414,10 @@ describe('fundo integration.', function()
                 size = size + stat.size
                 uv.fs_utime(recordPath, timestamp, timestamp)
             end
-            return fallback, recordPaths, size
+            return fallback, recordPaths, size + require('fundo.storage').size(fallback)
         end
 
-        local _, recordA = touchRecord(file_a, 100)
+        local fallbackA, recordA = touchRecord(file_a, 100)
         local fallbackB, recordB, sizeB = touchRecord(file_b, 200)
         manager.limitArchivesSize = (sizeB + 1) / 1024 / 1024
 
@@ -1428,6 +1430,7 @@ describe('fundo integration.', function()
         for _, recordPath in ipairs(recordA) do
             assert.Nil(fs.statSync(recordPath))
         end
+        assert.Nil(fs.statSync(require('fundo.storage').directory(fallbackA)))
         for _, recordPath in ipairs(recordB) do
             assert(fs.statSync(recordPath), 'expected newest record to be kept: ' .. fallbackB)
         end

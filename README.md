@@ -116,8 +116,9 @@ Fundo handles the common external-change cases:
   on the next `BufReadPost` and repairs it from the fallback archive when needed;
 - when no usable native undo file is available, Fundo bridges from the baseline
   snapshot to the current file contents with one native undo step;
-- when a native undo file exists but the matching fallback archive is missing,
-  Fundo does not replace the richer native history with a baseline-only step;
+- committed generations recover history even when compatibility archives are
+  missing or stale. For legacy records without generations, Fundo does not
+  replace an unmatched native undo file with a baseline-only step;
 - when a clean loaded buffer changes outside Neovim, `:checktime` triggers
   `FileChangedShellPost`, reloads the file, and Fundo preserves the previous undo
   history;
@@ -165,7 +166,21 @@ native undo, fallback, and optional baseline identity so Fundo can validate and
 diagnose the record. Existing archives without a manifest remain usable and are
 reported as legacy records until Fundo next persists them.
 
-The fallback archives, manifests, and baseline snapshots use disk space.
+Recovery transfers also keep immutable generations in `archives_dir/.generations`.
+Each generation includes checksummed buffer text and undo data. An atomic pointer
+selects the committed generation, with the previous complete generation retained
+as a fallback. An interrupted transfer cannot publish half a generation. Old
+archives migrate on their next successful save. These guarantees cover process
+interruption, not storage-device failure or power loss.
+
+Per-record locks coordinate Fundo processes sharing the same archive directory.
+A stale writer reports a conflict instead of replacing a newer generation.
+Preserve any local edits, then reopen the file to use the current generation.
+Dead locks on the same host are reclaimed. Native undo files remain under
+Neovim's control; committed copies protect Fundo recovery from competing native
+undo writes.
+
+The fallback archives, manifests, baseline snapshots, and generations use disk space.
 `limit_archives_size` caps their total size in MB. `baseline_max_file_size`
 independently limits one baseline snapshot, and `retention_days` optionally
 expires complete records by age. A `filter` callback can exclude paths from

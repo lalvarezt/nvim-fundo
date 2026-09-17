@@ -216,7 +216,7 @@ describe('recovery integrity.', function()
         'malformed', 'unsupported-version', 'wrong-path',
         'unknown-baseline-format', 'unknown-snapshot-format', 'invalid-format-type',
     }) do
-        it('rejects ' .. corruption .. ' metadata without guessing the baseline format.', function()
+        it('rejects ' .. corruption .. ' legacy metadata without guessing the baseline format.', function()
             local lines = run(([=[
                 local api, fn = vim.api, vim.fn
                 local fs, manifest = require('fundo.fs'), require('fundo.manifest')
@@ -226,6 +226,8 @@ describe('recovery integrity.', function()
                 local bomText = '\239\187\191text'
                 api.nvim_buf_set_lines(0, 0, -1, false, {bomText})
                 assert(u:saveBaseline())
+                require('fundo.storage').remove(u.fallbackPath)
+                u.generation = false
                 assert(u:readBaseline()[1] == bomText)
                 local metadata = manifest.path(u.fallbackPath)
                 local record = assert(manifest.read(metadata, u.fallbackPath))

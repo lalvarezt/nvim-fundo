@@ -582,7 +582,7 @@ describe('closed Neovim sessions.', function()
         ]]).lines)
         assert.equal('external|missing-archive', missingArchive.before)
         assert.equal('true', missingArchive.undo_ok)
-        assert.equal('external|missing-archive', missingArchive.after)
+        assert.equal('one|two', missingArchive.after)
 
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
@@ -611,7 +611,7 @@ describe('closed Neovim sessions.', function()
         ]]).lines)
         assert.equal('external|missing-fallback-with-baseline', missingFallbackWithBaseline.before)
         assert.equal('true', missingFallbackWithBaseline.undo_ok)
-        assert.equal('external|missing-fallback-with-baseline', missingFallbackWithBaseline.after)
+        assert.equal('one|two', missingFallbackWithBaseline.after)
 
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
@@ -674,7 +674,7 @@ describe('closed Neovim sessions.', function()
         assert.are_not.equal(0, #fn.glob(path.join(archivesDir, '*'), false, true))
     end)
 
-    it('does not replay a stale fallback archive as a successful repair.', function()
+    it('recovers the committed generation when compatibility archives are stale.', function()
         fn.writefile({'one'}, file)
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
@@ -692,9 +692,10 @@ describe('closed Neovim sessions.', function()
         fn.writefile({'external', 'change'}, file)
         local report = map_report(run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local before = BufferText()
             local ok, err = pcall(vim.cmd, 'undo')
             WriteReport({
-                'before=' .. BufferText(),
+                'before=' .. before,
                 'undo_ok=' .. tostring(ok),
                 'undo_err=' .. tostring(err),
                 'after=' .. BufferText(),
@@ -703,6 +704,6 @@ describe('closed Neovim sessions.', function()
         ]]).lines)
 
         assert.equal('external|change', report.before)
-        assert.are_not.equal('stale|archive', report.after)
+        assert.equal('one|two', report.after)
     end)
 end)

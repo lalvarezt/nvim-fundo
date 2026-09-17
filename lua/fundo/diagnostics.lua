@@ -7,6 +7,7 @@ local fs = require('fundo.fs')
 local manifest = require('fundo.manifest')
 local path = require('fundo.fs.path')
 local utils = require('fundo.utils')
+local storage = require('fundo.storage')
 
 local M = {}
 
@@ -72,6 +73,8 @@ function M.status(target)
     if manifestPath ~= '' then
         manifestValue, manifestError = manifest.read(manifestPath, fallbackPath)
     end
+    local generation, generationError
+    if fallbackPath ~= '' then generation, generationError = storage.inspect(fallbackPath) end
 
     local baseline = artifact(baselinePath)
     local reason, bufferSize
@@ -133,6 +136,8 @@ function M.status(target)
         last_action = tracked and tracked.lastAction or nil,
         last_updated = tracked and tracked.lastUpdated or nil,
         state = state,
+        generation = generation and generation.generation or nil,
+        generation_error = generationError ~= 'missing' and generationError or nil,
         native_undo = artifact(undoPath),
         fallback = artifact(fallbackPath),
         baseline = baseline,
@@ -212,6 +217,18 @@ function M.doctor()
     end
 
     local legacy = 0
+    for _, generation in ipairs(storage.records(config.archives_dir)) do
+        totalSize = totalSize + generation.size
+        local key = generation.fallbackPath and path.basename(generation.fallbackPath)
+            or '@generation-' .. path.basename(generation.directory)
+        records[key] = records[key] or {generation = generation}
+        local err = generation.error
+        if not err then
+            local _, readError = storage.read(generation.fallbackPath)
+            err = readError
+        end
+        if err then issue('invalid-generation', (generation.name or generation.directory) .. ': ' .. err) end
+    end
     local expired = 0
     local cutoff = config.retention_days and os.time() - config.retention_days * 24 * 60 * 60 or nil
     for key, record in pairs(records) do
@@ -229,7 +246,8 @@ function M.doctor()
         local newest = math.max(
             record.fallback and record.fallback.mtime.sec or 0,
             record.baseline and record.baseline.mtime.sec or 0,
-            record.manifest and record.manifest.mtime.sec or 0
+            record.manifest and record.manifest.mtime.sec or 0,
+            record.generation and record.generation.mtime or 0
         )
         if cutoff and newest < cutoff then
             expired = expired + 1
@@ -316,6 +334,8 @@ function M.formatStatus(value)
     if value.manifest_version then
         table.insert(lines, '  manifest version: ' .. value.manifest_version)
     end
+    if value.generation then table.insert(lines, '  committed generation: ' .. value.generation) end
+    if value.generation_error then table.insert(lines, '  generation error: ' .. value.generation_error) end
     if value.manifest_error then
         table.insert(lines, '  manifest error: ' .. value.manifest_error)
     end

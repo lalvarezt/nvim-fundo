@@ -1,0 +1,89 @@
+local fn = vim.fn
+local fs = require('fundo.fs')
+local storage = require('fundo.storage')
+
+describe('generation storage.', function()
+    local dir, fallback
+    before_each(function()
+        dir = fn.tempname()
+        fn.mkdir(dir, 'p')
+        fallback = dir .. '/archive'
+    end)
+    after_each(function() fn.delete(dir, 'rf') end)
+
+    local function snapshot(contents, expected)
+        return {
+            name = dir .. '/source', fallbackPath = fallback, undoPath = dir .. '/undo',
+            baselinePath = fallback .. '.base', contents = contents .. '\n',
+            undoContents = 'undo\0' .. contents, expectedGeneration = expected or false,
+            capturedAt = os.time(),
+        }
+    end
+
+    local function publish(contents, expected)
+        local value = snapshot(contents, expected)
+        storage.publish(value, function() end)
+        return value
+    end
+
+    it('keeps the last committed generation when publication is interrupted.', function()
+        local first = publish('first')
+        local nextSnapshot = snapshot('second', first.generation)
+        local ok = pcall(storage.publish, nextSnapshot, function() error('interrupted') end)
+        assert.False(ok)
+        assert.equal('first\n', storage.read(fallback).contents)
+        storage.clean(dir)
+        assert.equal(1, #fn.glob(storage.directory(fallback) .. '/*/record', false, true))
+        storage.publish(nextSnapshot, function() end)
+        assert.equal('second\n', storage.read(fallback).contents)
+    end)
+
+    it('rejects a stale writer before changing published artifacts.', function()
+        local first = publish('first')
+        local newer = publish('newer', first.generation)
+        local called = false
+        local ok, err = pcall(storage.publish, snapshot('stale', first.generation), function() called = true end)
+        assert.False(ok)
+        assert.False(called)
+        assert.truthy(tostring(err):find('another session', 1, true))
+        assert.equal(newer.generation, storage.read(fallback).generation)
+    end)
+
+    it('falls back to the previous complete generation and retains it on repair.', function()
+        local first = publish('first')
+        local second = publish('second', first.generation)
+        fs.writeFileSync(storage.directory(fallback) .. '/' .. second.generation .. '/undoContents', 'corrupt')
+        assert.equal(first.generation, storage.read(fallback).generation)
+        local third = publish('third', second.generation)
+        fs.writeFileSync(storage.directory(fallback) .. '/' .. third.generation .. '/contents', 'corrupt')
+        assert.equal('first\n', storage.read(fallback).contents)
+        assert.equal(2, #fn.glob(storage.directory(fallback) .. '/*/record', false, true))
+    end)
+
+    it('does not enter a record locked by a live process.', function()
+        storage.withLock(fallback, function()
+            local called = false
+            local ok = pcall(storage.withLock, fallback, function() called = true end)
+            assert.False(ok)
+            assert.False(called)
+        end)
+        assert.truthy(publish('after lock').generation)
+    end)
+
+    it('accounts for damaged metadata and removes it only while it remains invalid.', function()
+        publish('first')
+        local pointer = storage.directory(fallback) .. '/current'
+        local valid = table.concat(fn.readfile(pointer, 'b'), '\n')
+        fs.writeFileSync(pointer, 'invalid')
+        local records = storage.records(dir)
+        assert.equal(1, #records)
+        assert.truthy(records[1].error)
+        assert.True(records[1].size > 0)
+        fs.writeFileSync(pointer, valid)
+        storage.removeInvalid(records[1].directory)
+        assert.equal('first\n', storage.read(fallback).contents)
+        fs.writeFileSync(pointer, 'invalid')
+        storage.removeInvalid(records[1].directory)
+        assert.equal(0, #storage.records(dir))
+    end)
+end)

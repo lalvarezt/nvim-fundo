@@ -65,7 +65,7 @@ Default configuration:                                 *nvim-fundo-default-confi
 `limit_archives_size`~
         Maximum archive directory size in MB. When the size is exceeded, older
         archive records are pruned by modified time. Fallbacks, baselines, and
-        manifests all count toward this limit.
+        manifests, and committed generations all count toward this limit.
 
                                                 *fundo-baseline_max_file_size*
 `baseline_max_file_size`~
@@ -162,8 +162,9 @@ Supported external-change cases:
   persisted.
 
 - File changed while Neovim was closed and the fallback archive is missing:
-  If a native undo file still exists, Fundo does not replace that richer history
-  with a baseline-only step.
+  A committed generation can restore the matching history. For legacy records
+  without generations, an unmatched native undo file prevents baseline-only
+  recovery.
 
 - Clean loaded buffer changed outside Neovim:
   `:checktime` lets Neovim reload the file and emit `FileChangedShellPost`.
@@ -195,6 +196,20 @@ removes them. Diagnostics report these records as `baseline-only`.
 Fundo also syncs dirty undo state during lifecycle events such as `BufUnload`,
 `VimLeave`, `VimSuspend`, `TermEnter`, and `FocusLost`.
 
+Committed generations~
+        Recovery transfers store checksummed text and undo data in the private
+        `.generations` directory. An atomic pointer publishes a complete
+        generation. The previous complete generation remains available if the
+        current generation is damaged. Incomplete generations are cleaned on
+        startup or the next successful save. Old archives migrate on save.
+
+        Per-record locks and version checks prevent stale Fundo sessions from
+        replacing newer archives. A conflict remains pending. Preserve local
+        edits and reopen the file before retrying. Dead locks on the same host
+        are reclaimed. Native undo files remain under Neovim's control.
+        Generation copies protect recovery from competing native undo writes.
+        Process interruption is covered; power-loss durability is not promised.
+
 File moves are not a complete recovery guarantee. Fundo tracks the path Neovim
 reports for a buffer and follows paths changed with `:file` or `:saveas`, but arbitrary
 external move/rename recovery is still future work.
@@ -208,7 +223,8 @@ E211 after deleting or renaming an open file~
         to associate that buffer and its history with the new path.
 
 No undo history after an external change~
-        The native undo file and fallback archive must match. If the fallback
+        Fundo first tries the last complete committed generation. For legacy
+        records, the native undo file and fallback archive must match. If the fallback
         archive is missing while a native undo file exists, Fundo fails safely
         instead of replacing that history with a baseline-only step. If no usable
         native undo file is available, a baseline snapshot can provide one native
@@ -260,7 +276,7 @@ API                                                                 *fundo-api*
         or persist a snapshot.
         `last_error` is nil or a table with `stage`, `message`, and `time` as a
         Unix timestamp in seconds. Stages are `capture`, `fallback`, `undo`,
-        `baseline`, and `manifest`. The command prints the time in local time.
+        `baseline`, `manifest`, and `generation`. The command prints the time in local time.
         A failed save without a pending snapshot has state `transfer-error`.
         With a retained snapshot, the state remains `pending-transfer`.
         A successful retry clears the error. Error details remain in memory

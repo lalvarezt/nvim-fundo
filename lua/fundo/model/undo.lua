@@ -9,6 +9,7 @@ local utils = require('fundo.utils')
 local log = require('fundo.lib.log')
 local config = require('fundo.config')
 local manifest = require('fundo.manifest')
+local storage = require('fundo.storage')
 
 local archiveDirMode = 448 -- 0o700
 
@@ -97,7 +98,8 @@ function Undo:attach()
     if name == '' then
         return false
     end
-    if path.dirname(name) == self.dir or manifest.isPath(name, self.dir) then
+    if path.dirname(name) == self.dir or manifest.isPath(name, self.dir)
+        or name:sub(1, #storage.root(self.dir) + 1) == storage.root(self.dir) .. path.sep then
         log.debug('attach disabled undofile for archive buffer:', self.bufnr, name)
         vim.bo[self.bufnr].undofile = false
     end
@@ -150,6 +152,8 @@ function Undo:reset(dirty, bufName)
         self.undoPath = fn.undofile(name)
         self.fallbackPath = Undo.archivePath(name, self.undoPath, self.dir)
         self.baselinePath = self.fallbackPath .. '.base'
+        local ok, token = pcall(storage.token, self.fallbackPath)
+        self.generation = ok and token or false
         local legacyPath = path.join(self.dir, path.basename(self.undoPath))
         if legacyPath ~= self.fallbackPath and not fs.statSync(self.fallbackPath)
             and not fs.statSync(self.baselinePath) then
@@ -278,35 +282,46 @@ function Undo:saveBaseline(snapshot)
     local size = snapshot and #snapshot.contents or self:bufferSize()
     local selected = self:canSaveBaseline({type = 'file', size = size})
     local contents = selected and (snapshot and snapshot.contents or bufferContents(self.bufnr)) or nil
+    local transfer = {
+        baselineOnly = true, name = self.name, undoPath = self.undoPath,
+        fallbackPath = self.fallbackPath, baselinePath = self.baselinePath, contents = contents,
+        capturedAt = snapshot and snapshot.capturedAt or os.time(),
+        expectedGeneration = snapshot and snapshot.expectedGeneration or self.generation,
+    }
     local stage = 'baseline'
     local ok, err = pcall(function()
-        if not selected then
-            self:deleteBaseline()
-            stage = 'manifest'
-            if not fs.statSync(self.fallbackPath) then
-                manifest.remove(self.fallbackPath)
-                return
-            end
-        else
-            fs.mkdirpSync(path.dirname(self.baselinePath), archiveDirMode)
-            local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
-            local previous = record and record.baseline_format == 'buffer-lines-v1' and self:readBaseline()
-            if previous and table.concat(previous, '\n') .. '\n' == contents then
-                return
-            end
-            fs.writeFileSync(self.baselinePath, contents)
-        end
-        stage = 'manifest'
         local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
-        manifest.write({
-            name = self.name,
-            undoPath = self.undoPath,
-            fallbackPath = self.fallbackPath,
-            baselinePath = self.baselinePath,
-            snapshot_format = record and record.snapshot_format,
-            baseline_format = selected and 'buffer-lines-v1' or nil,
-            capturedAt = snapshot and snapshot.capturedAt or os.time(),
-        })
+        local previous = selected and record and record.baseline_format == 'buffer-lines-v1' and self:readBaseline()
+        if previous and table.concat(previous, '\n') .. '\n' == contents and storage.token(self.fallbackPath) then
+            if snapshot then snapshot.generation = self.generation end
+            return
+        end
+        local function persist()
+            if not selected then
+                self:deleteBaseline()
+                stage = 'manifest'
+                if not fs.statSync(self.fallbackPath) then
+                    manifest.remove(self.fallbackPath)
+                    return
+                end
+            else
+                fs.mkdirpSync(path.dirname(self.baselinePath), archiveDirMode)
+                fs.writeFileSync(self.baselinePath, contents)
+            end
+            stage = 'manifest'
+            manifest.write({
+                name = self.name, undoPath = self.undoPath, fallbackPath = self.fallbackPath,
+                baselinePath = self.baselinePath, snapshot_format = record and record.snapshot_format,
+                baseline_format = selected and 'buffer-lines-v1' or nil, capturedAt = transfer.capturedAt,
+            })
+            stage = 'generation'
+        end
+        if selected or storage.token(self.fallbackPath) then
+            self.generation = storage.publish(transfer, persist)
+        else
+            persist()
+        end
+        if snapshot then snapshot.generation = self.generation end
     end)
     if not ok then
         self.lastError = transferError(stage, err)
@@ -331,6 +346,7 @@ function Undo:queueBaseline()
         baselinePath = self.baselinePath,
         contents = bufferContents(self.bufnr),
         capturedAt = os.time(),
+        expectedGeneration = self.generation,
     }
     self.pendingTransfer = snapshot
     vim.schedule(function()
@@ -366,14 +382,19 @@ function Undo.completePendingTransferSync(transfer)
     end
     local stage = 'fallback'
     local ok, err = pcall(function()
-        fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
-        fs.writeFileSync(transfer.fallbackPath, transfer.contents)
-        stage = 'undo'
-        fs.writeFileSync(transfer.undoPath, transfer.undoContents)
-        stage = 'baseline'
-        saveBaselineSnapshot(transfer)
-        stage = 'manifest'
-        manifest.write(transfer)
+        local limit = config.baseline_max_file_size * 1024 * 1024
+        transfer.baselineContents = limit > 0 and #transfer.contents <= limit and transfer.contents or nil
+        storage.publish(transfer, function()
+            fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
+            fs.writeFileSync(transfer.fallbackPath, transfer.contents)
+            stage = 'undo'
+            fs.writeFileSync(transfer.undoPath, transfer.undoContents)
+            stage = 'baseline'
+            saveBaselineSnapshot(transfer)
+            stage = 'manifest'
+            manifest.write(transfer)
+            stage = 'generation'
+        end)
     end)
     if not ok then
         transfer.lastError = transferError(stage, err)
@@ -438,6 +459,7 @@ function Undo:transferSnapshot()
         snapshot_format = 'buffer-lines-v1',
         baseline_format = 'buffer-lines-v1',
         capturedAt = os.time(),
+        expectedGeneration = self.generation,
     }
 end
 
@@ -756,6 +778,7 @@ end
 function Undo:finishTransfer(transfer)
     if self.pendingTransfer ~= transfer then return end
     self.pendingTransfer = nil
+    self.generation = transfer.generation or self.generation
     -- Retrying an older snapshot does not resolve a newer capture failure.
     if self.lastError then return end
     self.isDirty = false
@@ -795,6 +818,21 @@ function Undo:check()
         local ok = pcall(Undo.completePendingTransferSync, self.pendingTransfer)
         if not ok then return end
         self:finishTransfer(self.pendingTransfer)
+    end
+    local committed, generationError = storage.read(self.fallbackPath)
+    if committed then
+        self.generation = committed.expectedGeneration
+        local loaded, reason = self:loadFallBack(committed)
+        if loaded then return end
+        if not committed.baselineOnly then
+            self.lastError = transferError('generation', reason or 'committed undo could not be loaded')
+            return
+        end
+        self:queueBaseline()
+        return
+    elseif generationError ~= 'missing' then
+        self.lastError = transferError('generation', generationError)
+        return
     end
     local _, recordErr = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
     if recordErr and recordErr ~= 'missing' then
