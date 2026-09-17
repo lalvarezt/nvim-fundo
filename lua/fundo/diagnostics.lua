@@ -73,6 +73,29 @@ function M.status(target)
         manifestValue, manifestError = manifest.read(manifestPath, fallbackPath)
     end
 
+    local baseline = artifact(baselinePath)
+    local reason, bufferSize
+    if name == '' then
+        reason = 'unnamed'
+    elseif filterError then
+        reason = 'filter-error'
+    elseif not selected then
+        reason = 'filtered'
+    elseif not manager.initialized then
+        reason = 'plugin-disabled'
+    elseif not bufnr or not api.nvim_buf_is_loaded(bufnr) then
+        reason = 'unloaded'
+    else
+        reason, bufferSize = require('fundo.model.undo'):new(bufnr, config.archives_dir):baselineEligibility()
+    end
+    baseline.eligible = reason == 'eligible'
+    baseline.reason = reason
+    baseline.limit = config.baseline_max_file_size * 1024 * 1024
+    baseline.buffer_size = bufferSize
+    baseline.captured_at = manifestValue and manifestValue.baseline and manifestValue.baseline.captured_at or nil
+    baseline.capture_state = failure and 'failed' or pending and 'pending'
+        or (baseline.exists and (not manifestError or manifestError == 'missing') and 'saved') or 'not-captured'
+
     local state
     if name == '' then
         state = 'unnamed'
@@ -112,7 +135,7 @@ function M.status(target)
         state = state,
         native_undo = artifact(undoPath),
         fallback = artifact(fallbackPath),
-        baseline = artifact(baselinePath),
+        baseline = baseline,
         manifest = artifact(manifestPath),
         manifest_version = manifestValue and manifestValue.version or nil,
         manifest_error = manifestError ~= 'missing' and manifestError or nil,
@@ -280,8 +303,16 @@ function M.formatStatus(value)
         '  native undo: ' .. presence(value.native_undo),
         '  fallback: ' .. presence(value.fallback),
         '  baseline: ' .. presence(value.baseline),
+        ('  baseline capture: %s; eligibility: %s; limit: %d bytes'):format(
+            value.baseline.capture_state, value.baseline.reason, value.baseline.limit),
         '  manifest: ' .. presence(value.manifest),
     }
+    if value.baseline.buffer_size then
+        table.insert(lines, ('  buffer snapshot size: %d bytes'):format(value.baseline.buffer_size))
+    end
+    if value.baseline.captured_at then
+        table.insert(lines, '  baseline captured at: ' .. os.date('%Y-%m-%d %H:%M:%S %z', value.baseline.captured_at))
+    end
     if value.manifest_version then
         table.insert(lines, '  manifest version: ' .. value.manifest_version)
     end

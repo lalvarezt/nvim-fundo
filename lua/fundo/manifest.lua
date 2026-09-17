@@ -102,6 +102,7 @@ function M.create(transfer)
         baseline = fs.statSync(transfer.baselinePath) and {
             path = path.normalize(transfer.baselinePath),
             stat = stat(transfer.baselinePath),
+            captured_at = transfer.capturedAt or os.time(),
         } or nil,
     }
 end

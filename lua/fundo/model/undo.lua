@@ -228,6 +228,20 @@ function Undo:bufferSize()
     return api.nvim_buf_get_offset(self.bufnr, api.nvim_buf_line_count(self.bufnr))
 end
 
+function Undo:baselineEligibility()
+    if not api.nvim_buf_is_loaded(self.bufnr) then return 'unloaded' end
+    local options = vim.bo[self.bufnr]
+    if api.nvim_buf_get_name(self.bufnr) == '' then return 'unnamed' end
+    if options.buftype ~= '' and options.buftype ~= 'acwrite' then return 'unsupported-buffer' end
+    if undoDisabled(self.bufnr) then return 'undo-disabled' end
+    if not options.modifiable then return 'not-modifiable' end
+    if options.modified then return 'modified' end
+    local size = self:bufferSize()
+    if self:baselineLimitBytes() <= 0 then return 'baseline-disabled', size end
+    if size > self:baselineLimitBytes() then return 'oversized', size end
+    return 'eligible', size
+end
+
 function Undo:canSaveBaseline(stat)
     local limit = self:baselineLimitBytes()
     if limit <= 0 or not stat then
@@ -291,6 +305,7 @@ function Undo:saveBaseline(snapshot)
             baselinePath = self.baselinePath,
             snapshot_format = record and record.snapshot_format,
             baseline_format = selected and 'buffer-lines-v1' or nil,
+            capturedAt = snapshot and snapshot.capturedAt or os.time(),
         })
     end)
     if not ok then
@@ -315,6 +330,7 @@ function Undo:queueBaseline()
         fallbackPath = self.fallbackPath,
         baselinePath = self.baselinePath,
         contents = bufferContents(self.bufnr),
+        capturedAt = os.time(),
     }
     self.pendingTransfer = snapshot
     vim.schedule(function()
@@ -421,6 +437,7 @@ function Undo:transferSnapshot()
         undoContents = contents,
         snapshot_format = 'buffer-lines-v1',
         baseline_format = 'buffer-lines-v1',
+        capturedAt = os.time(),
     }
 end
 

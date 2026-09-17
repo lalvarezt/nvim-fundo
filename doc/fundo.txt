@@ -250,6 +250,14 @@ API                                                                 *fundo-api*
         Return structured preservation status for the current buffer, a buffer
         number, or a file path. `:FundoStatus [path]` prints the same information.
         Path status includes pending transfers after the buffer closes.
+        `baseline` includes `eligible`, `reason`, `limit` in bytes,
+        `buffer_size` when available, and `capture_state`. Reasons include
+        `baseline-disabled`, `oversized`, `undo-disabled`, `modified`,
+        `not-modifiable`, `filtered`, `unloaded`, and `plugin-disabled`.
+        `captured_at` is the Unix capture time when recorded in the manifest.
+        A missing snapshot reports `not-captured`; absence alone does not
+        establish that a record was pruned. Status inspection does not capture
+        or persist a snapshot.
         `last_error` is nil or a table with `stage`, `message`, and `time` as a
         Unix timestamp in seconds. Stages are `capture`, `fallback`, `undo`,
         `baseline`, and `manifest`. The command prints the time in local time.
