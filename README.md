@@ -95,7 +95,10 @@ supported buffer accepted by `filter`. The buffer must be clean, modifiable,
 and have undo enabled. The snapshot must fit `baseline_max_file_size`.
 `:FundoStatus` reports a saved baseline without a fallback as `baseline-only`.
 
-Baseline writes are synchronous and retain a copy of the buffer text on disk.
+Baseline capture retains a copy of the buffer text on disk. Fundo checks the
+buffer size before copying its lines, then queues persistence for the next
+main-loop turn. Unchanged snapshots are not rewritten. Unload, exit, and
+`:FundoSync` flush pending snapshots. Disk writes still run on the main thread.
 The default limit is 8 MiB per snapshot, or `limit_archives_size` if smaller.
 Earlier versions used the full archive budget as the baseline limit. To retain
 that behavior, set `baseline_max_file_size` explicitly to your archive budget.

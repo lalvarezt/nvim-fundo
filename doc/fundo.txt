@@ -76,7 +76,10 @@ Default configuration:                                 *nvim-fundo-default-confi
         Earlier versions used `limit_archives_size` as the default. Set this
         option explicitly to your archive budget to retain that behavior.
         This limit does not restrict native undo preservation through fallback
-        archives. Baseline writes are synchronous during file open.
+        archives. Baseline capture checks the buffer size before copying lines.
+        Persistence is deferred until the next main-loop turn and skips
+        unchanged snapshots. Writes still run on the main thread. Unload,
+        exit, and `:FundoSync` flush pending snapshots.
 
                                                         *fundo-retention_days*
 `retention_days`~

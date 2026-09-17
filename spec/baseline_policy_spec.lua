@@ -29,6 +29,7 @@ describe('baseline metadata policy.', function()
         local lines = run([[
             local fundo = require('fundo')
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            assert(require('fundo.manager'):syncAllSync())
             local config = require('fundo.config')
             local before = fundo.status()
             fundo.setup({archives_dir = config.archives_dir, baseline_max_file_size = 0})
@@ -41,6 +42,67 @@ describe('baseline metadata policy.', function()
             vim.cmd('quitall!')
         ]])
         assert.same({'true', 'true', 'true', 'true'}, lines)
+    end)
+
+    it('captures before deferring persistence and skips unchanged writes.', function()
+        local lines = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+            assert(u.pendingTransfer and vim.fn.filereadable(u.baselinePath) == 0)
+            vim.fn.writefile({'outside'}, FILE)
+            assert(vim.wait(1000, function() return not u.pendingTransfer end))
+            assert(u:readBaseline()[1] == 'original')
+            local fs = require('fundo.fs')
+            local write, writes = fs.writeFileSync, 0
+            fs.writeFileSync = function(...)
+                writes = writes + 1
+                return write(...)
+            end
+            u:queueBaseline()
+            assert(vim.wait(1000, function() return not u.pendingTransfer end))
+            fs.writeFileSync = write
+            WriteReport({tostring(writes), tostring(#vim.fn.undotree().entries)})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'0', '0'}, lines)
+    end)
+
+    it('rejects oversized buffers before copying their lines.', function()
+        local lines = run([[
+            require('fundo.config').baseline_max_file_size = 1 / 1024 / 1024
+            local api = vim.api
+            local get, copies = api.nvim_buf_get_lines, 0
+            api.nvim_buf_get_lines = function(...)
+                copies = copies + 1
+                return get(...)
+            end
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            api.nvim_buf_get_lines = get
+            local u = require('fundo.manager'):get(api.nvim_get_current_buf())
+            WriteReport({tostring(copies), tostring(vim.fn.filereadable(u.baselinePath))})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'0', '0'}, lines)
+    end)
+
+    it('retains a failed deferred baseline after unload and recovers it on reopen.', function()
+        local lines = run([[
+            local fs = require('fundo.fs')
+            local write = fs.writeFileSync
+            fs.writeFileSync = function() error('blocked baseline') end
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+            assert(vim.wait(1000, function() return u.pendingTransfer.lastError ~= nil end))
+            vim.cmd('bwipeout!')
+            assert(require('fundo').status(FILE).pending)
+            vim.fn.writefile({'outside'}, FILE)
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('undo')
+            WriteReport({BufferText()})
+            fs.writeFileSync = write
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'original'}, lines)
     end)
 
     it('updates retained fallback metadata after removing its baseline.', function()

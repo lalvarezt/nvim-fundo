@@ -76,6 +76,13 @@ describe('config module.', function()
         assert.False(pcall(fundo.setup, {logging = {path = false}}))
     end)
 
+    it('caps the default baseline size but respects an explicit larger limit.', function()
+        fundo.setup({archives_dir = '~/fundo-default', limit_archives_size = 512})
+        assert.equal(8, config.baseline_max_file_size)
+        fundo.setup({archives_dir = '~/fundo-default', baseline_max_file_size = 32})
+        assert.equal(32, config.baseline_max_file_size)
+    end)
+
     it('rejects invalid storage policy config.', function()
         assert.False(pcall(fundo.setup, {baseline_max_file_size = -1}))
         assert.False(pcall(fundo.setup, {retention_days = -1}))

@@ -223,6 +223,11 @@ function Undo:baselineLimitBytes()
     return config.baseline_max_file_size * 1024 * 1024
 end
 
+function Undo:bufferSize()
+    -- Includes the normalized final newline, even for 'noendofline' buffers.
+    return api.nvim_buf_get_offset(self.bufnr, api.nvim_buf_line_count(self.bufnr))
+end
+
 function Undo:canSaveBaseline(stat)
     local limit = self:baselineLimitBytes()
     if limit <= 0 or not stat then
@@ -248,13 +253,17 @@ function Undo:deleteBaseline()
     log.debug('deleted baseline archive:', self.baselinePath)
 end
 
-function Undo:saveBaseline()
+function Undo:saveBaseline(snapshot)
     if not self.baselinePath or not self.name then
         log.debug('saveBaseline skipped; missing paths:', self.bufnr, self.name or '', self.baselinePath or '')
         return false
     end
-    local contents = bufferContents(self.bufnr)
-    local selected = self:canSaveBaseline({type = 'file', size = #contents})
+    if not snapshot and self.pendingTransfer and self.pendingTransfer.baselineOnly then
+        self.pendingTransfer = nil
+    end
+    local size = snapshot and #snapshot.contents or self:bufferSize()
+    local selected = self:canSaveBaseline({type = 'file', size = size})
+    local contents = selected and (snapshot and snapshot.contents or bufferContents(self.bufnr)) or nil
     local stage = 'baseline'
     local ok, err = pcall(function()
         if not selected then
@@ -266,6 +275,11 @@ function Undo:saveBaseline()
             end
         else
             fs.mkdirpSync(path.dirname(self.baselinePath), archiveDirMode)
+            local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+            local previous = record and record.baseline_format == 'buffer-lines-v1' and self:readBaseline()
+            if previous and table.concat(previous, '\n') .. '\n' == contents then
+                return
+            end
             fs.writeFileSync(self.baselinePath, contents)
         end
         stage = 'manifest'
@@ -289,6 +303,33 @@ function Undo:saveBaseline()
     return selected
 end
 
+function Undo:queueBaseline()
+    if not self:canSaveBaseline({type = 'file', size = self:bufferSize()}) then
+        self:saveBaseline()
+        return
+    end
+    local snapshot = {
+        baselineOnly = true,
+        name = self.name,
+        undoPath = self.undoPath,
+        fallbackPath = self.fallbackPath,
+        baselinePath = self.baselinePath,
+        contents = bufferContents(self.bufnr),
+    }
+    self.pendingTransfer = snapshot
+    vim.schedule(function()
+        if not self.attached or self.pendingTransfer ~= snapshot then return end
+        local dirty = self.isDirty
+        local ok, err = pcall(Undo.completePendingTransferSync, snapshot)
+        if ok then
+            self:finishTransfer(snapshot)
+            self.isDirty = dirty
+        else
+            pcall(log.warn, 'deferred baseline save failed:', self.name, err)
+        end
+    end)
+end
+
 local function saveBaselineSnapshot(transfer)
     local limit = config.baseline_max_file_size * 1024 * 1024
     if limit <= 0 or #transfer.contents > limit then
@@ -301,6 +342,12 @@ local function saveBaselineSnapshot(transfer)
 end
 
 function Undo.completePendingTransferSync(transfer)
+    if transfer.baselineOnly then
+        local writer = setmetatable(transfer, {__index = Undo})
+        local _, err = writer:saveBaseline(transfer)
+        if err then error(err, 0) end
+        return
+    end
     local stage = 'fallback'
     local ok, err = pcall(function()
         fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
@@ -414,8 +461,14 @@ function Undo:linesEqual(a, b)
     return true
 end
 
-function Undo:loadBaseline()
-    local baselineLines = self:readBaseline()
+function Undo:loadBaseline(transfer)
+    local baselineLines
+    if transfer then
+        baselineLines = vim.split(transfer.contents, '\n', {plain = true})
+        table.remove(baselineLines)
+    else
+        baselineLines = self:readBaseline()
+    end
     if not baselineLines then
         log.trace('loadBaseline skipped; no baseline:', self.baselinePath or '')
         return false
@@ -549,6 +602,9 @@ function Undo:loadFileAndUndo(winid, transfer)
 end
 
 function Undo:loadFallBack(transfer)
+    if transfer and transfer.baselineOnly then
+        return self:loadBaseline(transfer)
+    end
     if not transfer and not fs.statSync(self.fallbackPath) then
         log.trace('loadFallBack skipped; fallback missing:', self.fallbackPath)
         return false, 'missing-fallback'
@@ -661,8 +717,10 @@ function Undo:transferSync()
         end
     end
     if self:isEmpty() then
-        local _, err = self:saveBaseline()
+        local snapshot = self.pendingTransfer
+        local _, err = self:saveBaseline(snapshot and snapshot.baselineOnly and snapshot or nil)
         if err then error(err, 0) end
+        self.pendingTransfer = nil
         self.isDirty = false
         return
     end
@@ -716,6 +774,11 @@ function Undo:check()
         log.trace('check skipped; undo tree is not empty:', self.bufnr, self.name or '')
         return
     end
+    if self.pendingTransfer and self.pendingTransfer.baselineOnly then
+        local ok = pcall(Undo.completePendingTransferSync, self.pendingTransfer)
+        if not ok then return end
+        self:finishTransfer(self.pendingTransfer)
+    end
     local _, recordErr = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
     if recordErr and recordErr ~= 'missing' then
         pcall(log.warn, 'invalid recovery metadata:', self.name, recordErr)
@@ -737,7 +800,7 @@ function Undo:check()
         log.debug('check completed; baseline loaded:', self.bufnr, self.name or '')
         return
     end
-    self:saveBaseline()
+    self:queueBaseline()
     log.trace('check completed; baseline saved if possible:', self.bufnr, self.name or '')
 end
 
