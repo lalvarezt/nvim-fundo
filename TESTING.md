@@ -56,13 +56,20 @@ the current text.
 | Storage policy | Baseline-only retention, complete-record expiry, archive size pruning, baseline limits, failed pruning, missing archive directories, and private permissions |
 | Configuration | Filters, repeated setup, failed setup, disabling `undofile` after attachment, and enabling Fundo over a modified buffer |
 | Diagnostics | Healthy records, usable baseline-only records, invalid metadata, and existing status and doctor checks |
+| Baseline capture | Early size rejection without copying lines, deferred persistence, unchanged-write suppression, eligibility reasons, and persisted capture time |
+| Generations | Checksums, recovery from a previous complete generation, interrupted publication in a child process, dead-lock reclamation, and stale writers in overlapping sessions |
+| Tracking controls | Open, write, and manual policies; file and directory removal previews; native undo preservation; session suppression and explicit resumption |
+| Recovery preview | Defensive API and event copies, later unsaved edits, unchanged source contents, undo entries, and undo position |
+| Move association | Baseline, committed and legacy histories; edited moves across sessions; destination conflicts; corrupt sources; filters; identity suggestions; copied files and ambiguous hardlinks |
 
 Transfers now capture buffer text and undo data together on the Neovim main
 loop. A retry owns those captured bytes, so it does not depend on a live buffer
 or a source pathname. Publication runs without yielding between artifacts to
 prevent an unload or another save from interleaving with it. Individual file
-writes use temporary files and rename. Publication of the whole record is not
-a filesystem transaction across processes or power loss.
+writes use temporary files and rename. Immutable generations are published by
+an atomic pointer after their artifacts are ready. Per-record locks and version
+checks reject stale writers across processes. This covers process interruption;
+power-loss durability is not promised.
 
 New snapshots store buffer lines in UTF-8 with LF separators. The manifest
 identifies this format separately from legacy copies of source files. Recovery
@@ -79,8 +86,8 @@ contents, undo, redo, and persistence after reopening. `E211` for a missing file
 and `W12` for a conflicting external write are Neovim messages, not evidence of
 an archive failure.
 
-Arbitrary external moves remain outside automatic recovery. After moving an
-open file, `:file new-path` associates its buffer and history with the new path.
-Opening only a previously unknown destination after a closed-session move does
-not locate the old archive. Windows, concurrent editor processes writing the
-same record, and sudden power loss were not validated by this run.
+After moving an open file, `:file new-path` associates its buffer and history
+with the new path. After a closed-session move, `:FundoAssociate old-path`
+copies archived history to the open destination. Identity-based suggestions
+require a unique match and never apply automatically. Association tests use
+headless child sessions. Windows and sudden power loss were not validated.

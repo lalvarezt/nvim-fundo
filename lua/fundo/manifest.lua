@@ -64,6 +64,7 @@ local function stat(pathname)
         ino = value.ino,
         mode = value.mode,
         mtime = value.mtime and value.mtime.sec or nil,
+        birthtime = value.birthtime and {sec = value.birthtime.sec, nsec = value.birthtime.nsec} or nil,
         size = value.size,
         type = value.type,
     }

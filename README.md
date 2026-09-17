@@ -14,12 +14,11 @@ The goal of nvim-fundo is to make Neovim's undo file become stable and useful.
 - Inspect preservation health with `:FundoStatus` and `:FundoDoctor`
 - Limit archive size, baseline size, retention age, and selected files
 
-### TODO Features
+- Associate archived history with an externally moved file
+- Preview recovered changes without changing the source undo position
+- Choose capture on open, on write, or by explicit request
 
-- Restore undo history even if the file has been moved
-- Support useful use cases for undo file
-
-See [proposed improvements](./IMPROVEMENTS.md) for priorities and tradeoffs.
+See [implemented improvements](./IMPROVEMENTS.md) for behavior and tradeoffs.
 
 ## Quickstart
 
@@ -57,6 +56,8 @@ Use undo file as usual.
 - `:FundoDoctor` checks archive permissions, usage, metadata, and orphaned
   artifacts.
 - `:FundoTrack` starts tracking the current buffer explicitly.
+- `:FundoAssociate old-path` associates archived history with the current file.
+  Without an argument, it reports a suggestion when file identity is unambiguous.
 - `:FundoPreview` compares the recovered previous contents with the current
   buffer in a new tab. Both diff buffers are read-only snapshots. The source
   buffer and its undo position remain unchanged.
@@ -165,8 +166,9 @@ resolves on completion or rejects on failure. Sync requires Fundo to be enabled
 and also runs archive cleanup when the manager's hourly scan is due.
 
 Status includes `last_error` with a `stage`, `message`, and Unix timestamp `time`
-when a save fails. Stages are `capture`, `fallback`, `undo`, `baseline`, and
-`manifest`. A failure before a retry snapshot exists reports `transfer-error`;
+when a save fails. Stages are `capture`, `fallback`, `undo`, `baseline`,
+`manifest`, and `generation`. A failure before a retry snapshot exists reports
+`transfer-error`;
 a retained snapshot reports `pending-transfer`. `:FundoStatus` prints the error
 and time, and `:FundoDoctor` lists failures by source path. A successful retry
 clears the error. Details are kept in memory for tracked buffers and detached
@@ -210,9 +212,22 @@ expires complete records by age. A `filter` callback can exclude paths from
 tracking. Pruning removes an expired or over-budget record together with its
 metadata.
 
-File moves are still listed as a TODO feature. Today, Fundo tracks the path that
-Neovim reports for a buffer and can follow paths changed with `:file` or `:saveas`, but it
-does not claim complete move/rename recovery for arbitrary external moves.
+Fundo follows buffer paths changed with `:file` or `:saveas`. After an external
+move while Neovim is closed, open the destination and run
+`:FundoAssociate old-path` to copy its persisted history to the destination.
+The source archives remain available. Association does not rename or write
+either source file. It requires a clean, eligible destination with no existing
+undo history; a matching baseline-only record is allowed. Conflicting history
+is rejected before the destination buffer changes.
+
+With no argument, `:FundoAssociate` reports a suggestion without applying it.
+Suggestions require one missing source with matching device, inode, birth time,
+and contents. Equal contents alone are insufficient. Edited moves, moves across
+filesystems, and systems without this identity information need an explicit
+old path. `require('fundo').associate(old_path, new_path)` and
+`require('fundo').association_candidates(new_path)` expose these operations;
+the destination must be loaded and defaults to the current buffer.
+
 Neovim can still report `E211` when `:checktime` detects a missing source file.
 That warning does not mean Fundo's archive transfer failed.
 

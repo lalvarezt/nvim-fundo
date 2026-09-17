@@ -57,6 +57,19 @@ function M.preview(bufnr)
     return require('fundo.preview').show(bufnr)
 end
 
+---Copy an old path's archived history to a clean, loaded destination.
+---@param oldPath string
+---@param newPath? string
+function M.associate(oldPath, newPath)
+    return require('fundo.archive').associate(oldPath, newPath)
+end
+
+---Suggest a moved source only when filesystem identity and contents agree uniquely.
+---@param newPath? string
+function M.association_candidates(newPath)
+    return require('fundo.archive').associationCandidates(newPath)
+end
+
 ---Setup configuration and enable fundo
 ---@param opts? FundoConfig
 function M.setup(opts)

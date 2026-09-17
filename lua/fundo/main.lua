@@ -64,6 +64,15 @@ local function createCommand()
     api.nvim_create_user_command('FundoPreview', function()
         require('fundo').preview()
     end, {force = true})
+    api.nvim_create_user_command('FundoAssociate', function(opts)
+        if opts.fargs[1] then
+            require('fundo').associate(opts.fargs[1])
+        else
+            local candidates = require('fundo').association_candidates()
+            print(candidates[1] and ('Suggested association: :FundoAssociate ' .. vim.fn.fnameescape(candidates[1]))
+                or 'No unambiguous archived source found; specify the old path explicitly.')
+        end
+    end, {nargs = '?', complete = 'file', force = true})
     api.nvim_create_user_command('FundoForget', function(opts)
         local result = require('fundo').forget(opts.args ~= '' and opts.args or nil, {apply = opts.bang})
         local lines = {('%s %d Fundo records; native undo files are kept'):format(

@@ -109,4 +109,153 @@ function M.forget(target, opts)
     return result
 end
 
+local function withScratch(record, callback)
+    local bufnr = api.nvim_create_buf(false, true)
+    vim.bo[bufnr].undofile = false
+    local u = undo:new(bufnr, config.archives_dir)
+    u.name, u.undoPath, u.fallbackPath = record.name, record.undoPath, record.fallbackPath
+    u.baselinePath = record.fallbackPath .. '.base'
+    local ok, result = pcall(callback, u, bufnr)
+    api.nvim_buf_delete(bufnr, {force = true})
+    if not ok then error(result, 0) end
+    return result
+end
+
+local function sourceSnapshot(name)
+    local matches = {}
+    for _, record in pairs(M.records()) do
+        if record.name == name then table.insert(matches, record) end
+    end
+    -- Legacy records without metadata can still be addressed explicitly.
+    if #matches == 0 then
+        local undoPath = fn.undofile(name)
+        assert(undoPath ~= '', 'source has no usable undo path')
+        matches[1] = {name = name, undoPath = undoPath,
+            fallbackPath = undo.archivePath(name, undoPath, config.archives_dir)}
+    end
+    assert(#matches == 1, 'multiple archives match the old path; association is ambiguous')
+    local record = matches[1]
+    local committed, err = storage.read(record.fallbackPath)
+    if committed then return committed end
+    assert(err == 'missing', err)
+    return withScratch(record, function(u, bufnr)
+        if fs.statSync(record.fallbackPath) and fs.statSync(record.undoPath) then
+            api.nvim_buf_set_lines(bufnr, 0, -1, false, u:readFallbackLines())
+            local loaded, failure = u:loadUndo()
+            assert(loaded, failure)
+            return u:transferSnapshot()
+        end
+        local baseline = u:readBaseline()
+        assert(baseline, 'no usable archive for the old path')
+        return {name = name, baselineOnly = true, contents = table.concat(baseline, '\n') .. '\n'}
+    end)
+end
+
+function M.associationCandidates(newPath)
+    newPath = newPath or api.nvim_buf_get_name(0)
+    if newPath == '' then return {} end
+    newPath = normalize(newPath)
+    local bufnr = fn.bufnr(newPath)
+    if bufnr < 0 or not api.nvim_buf_is_loaded(bufnr) or vim.bo[bufnr].modified then return {} end
+    local current = fs.statSync(newPath)
+    if not current or not current.ino or current.ino == 0 or not current.birthtime
+        or current.birthtime.sec == 0 then return {} end
+    local contents = table.concat(api.nvim_buf_get_lines(bufnr, 0, -1, false), '\n') .. '\n'
+    local candidates = {}
+    for _, record in pairs(M.records()) do
+        if record.name ~= newPath and not fs.statSync(record.name) then
+            local metadata = manifest.read(manifest.path(record.fallbackPath), record.fallbackPath)
+            local previous = metadata and metadata.source.stat
+            if previous and previous.dev == current.dev and previous.ino == current.ino
+                and vim.deep_equal(previous.birthtime, current.birthtime) then
+                local ok, saved = pcall(sourceSnapshot, record.name)
+                if ok and saved.contents == contents then table.insert(candidates, record.name) end
+            end
+        end
+    end
+    if #candidates == 1 then return candidates end
+    return {}
+end
+
+function M.associate(oldPath, newPath)
+    local manager = require('fundo.manager')
+    assert(manager.initialized, 'Fundo must be enabled before associating history')
+    assert(type(oldPath) == 'string' and oldPath ~= '', 'association requires the old path')
+    oldPath = normalize(oldPath)
+    newPath = newPath or api.nvim_buf_get_name(0)
+    assert(type(newPath) == 'string' and newPath ~= '', 'association requires a named destination')
+    newPath = normalize(newPath)
+    assert(oldPath ~= newPath, 'source and destination paths must differ')
+    local bufnr = fn.bufnr(newPath)
+    assert(bufnr >= 0 and api.nvim_buf_is_loaded(bufnr), 'open the destination file before associating history')
+    local eligibility = undo:new(bufnr, config.archives_dir):baselineEligibility()
+    assert(eligibility == 'eligible' or eligibility == 'baseline-disabled' or eligibility == 'oversized',
+        'destination is ineligible: ' .. eligibility)
+    assert(config.filter(newPath, bufnr) == true, 'destination is excluded by filter')
+    assert(vim.bo[bufnr].buftype == '', 'destination must be a regular file buffer')
+    local tree = require('fundo.utils').bufCall(bufnr, fn.undotree)
+    assert(#tree.entries == 0, 'destination already has undo history; both histories were kept')
+    local undoPath = fn.undofile(newPath)
+    assert(undoPath ~= '', 'destination has no usable undo path')
+    assert(not fs.statSync(undoPath), 'destination already has a native undo file; both histories were kept')
+    local fallback = undo.archivePath(newPath, undoPath, config.archives_dir)
+    local current = api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    local currentText = table.concat(current, '\n') .. '\n'
+    local existing, generationError = storage.read(fallback)
+    assert(existing or generationError == 'missing', generationError)
+    if existing then
+        assert(existing.baselineOnly and existing.contents == currentText,
+            'destination already has different archived history; both histories were kept')
+    elseif fs.statSync(fallback) then
+        error('destination already has a fallback archive; both histories were kept')
+    elseif fs.statSync(fallback .. '.base') then
+        local probe = undo:new(bufnr, config.archives_dir)
+        probe.fallbackPath, probe.baselinePath = fallback, fallback .. '.base'
+        local previous = probe:readBaseline()
+        assert(previous and table.concat(previous, '\n') .. '\n' == currentText,
+            'destination already has different baseline history; both histories were kept')
+    end
+    local active = manager.undos[bufnr]
+    local pending = (active and (active.pendingRecovery or active.pendingTransfer)) or manager.pendingTransfers[fallback]
+    assert(not pending or (pending.baselineOnly and pending.contents == currentText),
+        'destination has pending history; both histories were kept')
+    local token = storage.token(fallback)
+    local source = sourceSnapshot(oldPath)
+    local destination = {name = newPath, undoPath = undoPath, fallbackPath = fallback}
+    local transfer = withScratch(destination, function(u, scratch)
+        -- The initial scratch contents must not become part of destination history.
+        vim.bo[scratch].undolevels = -1
+        api.nvim_buf_set_lines(scratch, 0, -1, false, current)
+        vim.bo[scratch].undolevels = vim.bo[bufnr].undolevels
+        vim.bo[scratch].modified = false
+        local loaded, reason = u:loadFallBack(source)
+        assert(loaded or (source.baselineOnly and source.contents == currentText), reason or 'source history could not be loaded')
+        if u:isEmpty() then
+            return {baselineOnly = true, name = newPath, undoPath = undoPath, fallbackPath = fallback,
+                baselinePath = fallback .. '.base', contents = currentText, capturedAt = os.time()}
+        end
+        return u:transferSnapshot()
+    end)
+    transfer.expectedGeneration = token
+    transfer.rejectExistingUndo = true
+    undo.completePendingTransferSync(transfer)
+    if active then
+        active.pendingTransfer = nil
+        active:dispose()
+        manager.undos[bufnr] = nil
+    end
+    manager.pendingTransfers[fallback] = nil
+    manager.manualPaths[newPath] = true
+    manager.forgotten[newPath] = nil
+    local tracked = assert(manager:attach(bufnr, 'manual'), 'destination could not be attached')
+    local loaded, reason = tracked:loadFallBack(transfer)
+    assert(loaded or transfer.baselineOnly, reason or 'associated history could not be loaded')
+    tracked.isDirty = false
+    local previous = vim.split(source.contents, '\n', {plain = true})
+    table.remove(previous)
+    tracked:recordRecovery(previous, current, 'association')
+    tracked.lastAction, tracked.lastUpdated = 'associated', os.time()
+    return {source = oldPath, destination = newPath, generation = storage.token(fallback)}
+end
+
 return M

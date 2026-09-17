@@ -218,9 +218,17 @@ Committed generations~
         Generation copies protect recovery from competing native undo writes.
         Process interruption is covered; power-loss durability is not promised.
 
-File moves are not a complete recovery guarantee. Fundo tracks the path Neovim
-reports for a buffer and follows paths changed with `:file` or `:saveas`, but arbitrary
-external move/rename recovery is still future work.
+Moved files~
+        Fundo follows buffer paths changed with `:file` or `:saveas`. After an
+        external move while Neovim is closed, open the destination and use
+        `:FundoAssociate old-path` to copy its persisted history. Source archives
+        remain available. Neither source file is renamed or written.
+
+        Without an argument, `:FundoAssociate` suggests a missing source only
+        when device, inode, birth time, and contents identify one archive.
+        Suggestions never apply automatically. Edited moves, moves across
+        filesystems, and unavailable identity information require an explicit
+        old path.
 
 ==============================================================================
 TROUBLESHOOTING                                          *fundo-troubleshooting*
@@ -256,12 +264,36 @@ Dirty buffer was not replaced by an external file change~
 ==============================================================================
 API                                                                 *fundo-api*
 
+                                                        *fundo.associate()*
+                                                        *:FundoAssociate*
+`require('fundo').associate({old_path}, {new_path})`~
+        Copy persisted history from old_path to a loaded destination. new_path
+        defaults to the current buffer's path. Requires Fundo to be enabled
+        and the destination to be clean, modifiable, undo-enabled, and accepted
+        by the filter. Existing destination undo history or a native undo file
+        causes an error. A matching baseline-only destination record is allowed.
+
+        Validates and publishes the new archive before applying its history to
+        the destination buffer. Keeps source archives and file contents intact.
+        Returns `source`, `destination`, and the committed `generation` token.
+        `:FundoAssociate old-path` applies to the current buffer.
+
+                                                *fundo.association_candidates()*
+`require('fundo').association_candidates({new_path})`~
+        Return a list containing one unambiguous missing source path, or an
+        empty list. The destination must be loaded and clean; defaults to the
+        current buffer. Requires matching device, inode, nonzero birth time,
+        and contents. Equal contents alone do not establish file identity.
+        Does not change the buffer or archives. `:FundoAssociate` without an
+        argument reports the suggestion without applying it.
+
                                                         *fundo.recovery()*
                                                         *FundoRecovered*
 `require('fundo').recovery({bufnr})`~
         Return a copy of the latest recovered change, or nil when none exists.
         Defaults to the current buffer. Fields are `before` and `after` line
-        arrays, `name`, `bufnr`, `kind` (baseline or fallback), and `time`.
+        arrays, `name`, `bufnr`, `kind` (baseline, fallback, or association),
+        and `time`.
         The pair survives baseline advancement until the buffer is detached.
         `User FundoRecovered` delivers a copy of these fields as `event.data`
         on the next main-loop turn after Fundo recovers a changed file.

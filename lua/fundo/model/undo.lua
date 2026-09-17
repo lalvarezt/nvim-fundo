@@ -385,6 +385,9 @@ function Undo.completePendingTransferSync(transfer)
         local limit = config.baseline_max_file_size * 1024 * 1024
         transfer.baselineContents = limit > 0 and #transfer.contents <= limit and transfer.contents or nil
         storage.publish(transfer, function()
+            if transfer.rejectExistingUndo then
+                assert(not fs.statSync(transfer.undoPath), 'destination native undo appeared during association')
+            end
             fs.mkdirpSync(path.dirname(transfer.fallbackPath), archiveDirMode)
             fs.writeFileSync(transfer.fallbackPath, transfer.contents)
             stage = 'undo'
@@ -486,6 +489,13 @@ function Undo:readBaseline()
     end
     log.debug('read baseline archive:', self.baselinePath, 'lines:', #lines)
     return lines
+end
+
+function Undo:readFallbackLines()
+    local record, err = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
+    if err and err ~= 'missing' then error(err) end
+    if record and record.snapshot_format == 'buffer-lines-v1' then return readSnapshot(self.fallbackPath) end
+    return readLegacySnapshot(self.fallbackPath)
 end
 
 function Undo:linesEqual(a, b)
@@ -636,7 +646,9 @@ function Undo:loadFileAndUndo(winid, transfer)
             pcall(log.warn, 'failed to load undo file:', self.undoPath, undoErr)
             error(undoErr or ('failed to load undo file: ' .. self.undoPath))
         end
-        api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
+        if not self:linesEqual(beforeLines, lines) then
+            api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
+        end
         -- Keep subsequent edits separate from the recovered external change.
         utils.bufCall(self.bufnr, function()
             cmd('let &l:undolevels = &l:undolevels')
