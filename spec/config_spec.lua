@@ -87,6 +87,7 @@ describe('config module.', function()
         assert.False(pcall(fundo.setup, {baseline_max_file_size = -1}))
         assert.False(pcall(fundo.setup, {retention_days = -1}))
         assert.False(pcall(fundo.setup, {filter = 'all'}))
+        assert.False(pcall(fundo.setup, {track_on = 'sometimes'}))
     end)
 
     it('uses FUNDO_LOG as an opt-in override.', function()

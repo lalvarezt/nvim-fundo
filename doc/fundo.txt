@@ -47,6 +47,7 @@ Default configuration:                                 *nvim-fundo-default-confi
         limit_archives_size = 512,
         baseline_max_file_size = 8,
         retention_days = nil,
+        track_on = 'open',
         filter = function(path, bufnr) return true end,
         logging = {
             enabled = false,
@@ -95,6 +96,13 @@ Default configuration:                                 *nvim-fundo-default-confi
         Exclusion does not erase previously saved archives or disable Neovim's
         own persistent undo files.
 
+                                                        *fundo-track_on*
+`track_on`~
+        When tracking starts for files without Fundo records. `open` is the
+        default. `write` waits for the first write. `manual` waits for
+        `:FundoTrack`. Existing records still recover on open under all policies.
+        Explicit tracking respects `filter`, buffer type, and undo settings.
+
                                                         *fundo-logging*
 `logging`~
         Logging configuration. Logging is disabled by default. When enabled,
@@ -126,7 +134,7 @@ Successful transfers also write a versioned manifest under
 prevent recovery; diagnostics report those records as legacy.
 
 Opening a file without editing it~
-        Opening an eligible file starts retaining its contents on disk, even
+        With `track_on = 'open'`, opening an eligible file retains its contents, even
         if you never edit or write the file. For a file with no previous undo
         history or recovery archives:
 
@@ -247,6 +255,30 @@ Dirty buffer was not replaced by an external file change~
 
 ==============================================================================
 API                                                                 *fundo-api*
+
+                                                        *fundo.track()*
+                                                        *:FundoTrack*
+`require('fundo').track({bufnr})`~
+        Start tracking a named, loaded buffer. Defaults to the current buffer.
+        Returns true or raises an error if the buffer is ineligible or Fundo
+        is disabled. Resumes a buffer stopped by `:FundoForget!`.
+        `:FundoTrack` applies to the current buffer.
+
+                                                        *fundo.forget()*
+                                                        *:FundoForget*
+`require('fundo').forget({target}, {opts})`~
+        Preview Fundo record removal for a path. Defaults to the current file.
+        A directory selects its descendants. Set `opts.project = true` for a
+        project directory that no longer exists. Returns `records`, `bytes`,
+        `errors`, `unidentified`, `removed`, and `applied`.
+
+        Set `opts.apply = true` to remove the selected Fundo records and stop
+        tracking those paths for this Neovim process. Native undo files and
+        buffer contents remain. Other sessions can still capture these paths.
+        `:FundoTrack` resumes an individual buffer. Use `filter` for a persistent
+        exclusion. Records with unidentified source paths are reported and kept.
+
+        `:FundoForget [path]` previews removal. `:FundoForget! [path]` applies it.
 
                                                         *fundo.setup()*
 `require('fundo').setup({opts})`~

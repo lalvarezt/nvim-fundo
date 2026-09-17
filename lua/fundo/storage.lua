@@ -51,6 +51,11 @@ function M.token(fallbackPath)
     return value and value.current or false
 end
 
+function M.revision(fallbackPath)
+    local filename = path.join(M.directory(fallbackPath), 'current')
+    return fs.statSync(filename) and fn.sha256(readFile(filename)) or false
+end
+
 function M.inspect(fallbackPath)
     local ok, value = pcall(head, fallbackPath)
     if not ok then return nil, tostring(value) end

@@ -90,6 +90,7 @@ function M.status(target)
         reason = 'unloaded'
     else
         reason, bufferSize = require('fundo.model.undo'):new(bufnr, config.archives_dir):baselineEligibility()
+        if reason == 'eligible' then reason = manager:trackingReason(bufnr) or reason end
     end
     baseline.eligible = reason == 'eligible'
     baseline.reason = reason

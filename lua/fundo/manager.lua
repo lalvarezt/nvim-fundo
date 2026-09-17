@@ -77,8 +77,47 @@ function Manager:detach(bufnr)
     return true
 end
 
-function Manager:attach(bufnr)
+function Manager:trackingReason(bufnr, trigger)
+    local name = path.normalize(api.nvim_buf_get_name(bufnr))
+    if self.manualPaths and self.manualPaths[name] then return end
+    if self.forgotten and self.forgotten[name] then return 'forgotten' end
+    for prefix in pairs(self.forgottenProjects or {}) do
+        local directory = prefix:sub(-1) == path.sep and prefix or prefix .. path.sep
+        if name == prefix or name:sub(1, #directory) == directory then return 'forgotten' end
+    end
+    if self.undos and self.undos[bufnr] then return end
+    if config.track_on == 'open' or trigger == 'manual' or (config.track_on == 'write' and trigger == 'write') then
+        return
+    end
+    local undoPath = fn.undofile(name)
+    if undoPath ~= '' then
+        local fallback = undo.archivePath(name, undoPath, self.archivesDir)
+        if fs.statSync(fallback) or fs.statSync(fallback .. '.base')
+            or fs.statSync(path.join(storage.directory(fallback), 'current')) then return end
+    end
+    return config.track_on == 'write' and 'awaiting-write' or 'awaiting-manual'
+end
+
+function Manager:forgetName(name)
+    name = path.normalize(name)
+    self.forgotten = self.forgotten or {}
+    self.forgotten[name] = true
+    if self.manualPaths then self.manualPaths[name] = nil end
+    for bufnr, u in pairs(self.undos or {}) do
+        if path.normalize(u.name) == name then
+            u.pendingTransfer = nil
+            u:dispose()
+            self.undos[bufnr] = nil
+        end
+    end
+    for key, transfer in pairs(self.pendingTransfers or {}) do
+        if path.normalize(transfer.name) == name then self.pendingTransfers[key] = nil end
+    end
+end
+
+function Manager:attach(bufnr, trigger)
     if not self.undos[bufnr] then
+        if self:trackingReason(bufnr, trigger) then return end
         local u = undo:new(bufnr, self.archivesDir)
         if u:attach() then
             if self.pendingTransfers[u.fallbackPath] then
@@ -373,6 +412,9 @@ function Manager:initialize()
     end
     storage.clean(self.archivesDir)
     self.undos = {}
+    self.forgotten = self.forgotten or {}
+    self.forgottenProjects = self.forgottenProjects or {}
+    self.manualPaths = self.manualPaths or {}
     self.pendingTransfers = self.pendingTransfers or {}
     self.lastScannedtime = uv.hrtime()
     self.mutex = mutex:new()
@@ -430,7 +472,7 @@ function Manager:initialize()
     end, self.disposables)
     event:on('BufWritePost', function(bufnr)
         logBufferEvent('BufWritePost', bufnr)
-        local u = self:attach(bufnr)
+        local u = self:attach(bufnr, 'write')
         if u then
             u:reset(true)
         end

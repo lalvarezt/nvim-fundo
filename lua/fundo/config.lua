@@ -6,6 +6,7 @@ local path = require('fundo.fs.path')
 ---@field baseline_max_file_size? number
 ---@field retention_days? number
 ---@field filter? fun(path: string, bufnr: number): boolean
+---@field track_on? 'open'|'write'|'manual'
 ---@field logging? FundoLoggingConfig
 ---@class FundoLoggingConfig
 ---@field enabled boolean
@@ -14,6 +15,7 @@ local path = require('fundo.fs.path')
 local def = {
     archives_dir = vim.fn.stdpath('cache') .. path.sep .. 'fundo',
     limit_archives_size = 512,
+    track_on = 'open',
     filter = function()
         return true
     end,
@@ -68,6 +70,9 @@ local function reload()
     vim.validate('archives_dir', resolved.archives_dir, 'string')
     vim.validate('baseline_max_file_size', resolved.baseline_max_file_size, 'number')
     vim.validate('filter', resolved.filter, 'function')
+    if resolved.track_on ~= 'open' and resolved.track_on ~= 'write' and resolved.track_on ~= 'manual' then
+        error('track_on must be open, write, or manual', 3)
+    end
     if resolved.retention_days ~= nil then
         vim.validate('retention_days', resolved.retention_days, 'number')
         if resolved.retention_days < 0 then
@@ -87,6 +92,7 @@ local function reload()
     Config.baseline_max_file_size = resolved.baseline_max_file_size
     Config.retention_days = resolved.retention_days
     Config.filter = resolved.filter
+    Config.track_on = resolved.track_on
     Config.logging = {
         enabled = resolved.logging.enabled,
         level = resolved.logging.level,
@@ -103,6 +109,7 @@ Config = {
     baseline_max_file_size = defaultBaselineMaxFileSize,
     retention_days = nil,
     filter = def.filter,
+    track_on = def.track_on,
     logging = vim.deepcopy(def.logging),
     reload = reload
 }

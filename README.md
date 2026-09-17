@@ -56,6 +56,11 @@ Use undo file as usual.
   state for the current buffer or an optional path.
 - `:FundoDoctor` checks archive permissions, usage, metadata, and orphaned
   artifacts.
+- `:FundoTrack` starts tracking the current buffer explicitly.
+- `:FundoForget [path]` previews removal of Fundo records for a file or directory.
+  `:FundoForget! [path]` removes them and stops tracking those paths in this
+  Neovim session. Native undo files remain. `:FundoTrack` resumes a selected
+  buffer; other Neovim sessions can still capture the file.
 
 ## Documentation
 
@@ -77,7 +82,8 @@ normal Neovim undo step from the previous file contents to the current contents.
 After that, `:undo` and `:redo` are handled by Neovim.
 
 Opening an eligible file starts retaining its contents, even if you never edit
-or write it. For a file with no previous undo history or recovery archives:
+or write it, with the default `track_on = 'open'`. For a file with no previous
+undo history or recovery archives:
 
 1. Open the file with contents A. Its undo history is empty, and Fundo saves A
    as a separate baseline snapshot.
@@ -109,6 +115,13 @@ Set `baseline_max_file_size = 0` to disable baseline snapshots. Use `filter` to
 exclude paths from all Fundo tracking, or `retention_days` to expire saved
 records. These controls do not disable Neovim's own persistent undo files.
 Excluding a path does not erase archives already saved for it.
+
+Set `track_on = 'write'` to start new records after the first write, or
+`track_on = 'manual'` to start them with `:FundoTrack`. Existing records continue
+to recover on open under either policy. Explicit tracking still respects
+`filter`, buffer type, and undo settings. A directory passed to `:FundoForget`
+selects its descendants, not similarly named sibling directories. Records
+whose source cannot be identified are reported and kept.
 
 Fundo handles the common external-change cases:
 
@@ -227,6 +240,11 @@ The upstream BSD-3-Clause license is included in [LICENSE.promise-async](./LICEN
     filter = {
         description = [[Return true to track a path and false to exclude it.]],
         default = function(path, bufnr) return true end
+    },
+    track_on = {
+        description = [[Start new records on open, write, or manual request.
+        Existing records still recover on open.]],
+        default = 'open'
     },
     logging = {
         description = [[Logging configuration. Disabled by default. When enabled, Fundo writes

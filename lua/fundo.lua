@@ -29,6 +29,19 @@ function M.sync()
     return require('fundo.main').sync()
 end
 
+---Start tracking a loaded buffer, subject to the configured filter and undo options.
+---@param bufnr? number
+function M.track(bufnr)
+    return require('fundo.main').track(bufnr)
+end
+
+---Preview record removal, or apply it with opts.apply. Native undo files are kept.
+---@param target? string
+---@param opts? table
+function M.forget(target, opts)
+    return require('fundo.archive').forget(target, opts)
+end
+
 ---Setup configuration and enable fundo
 ---@param opts? FundoConfig
 function M.setup(opts)
