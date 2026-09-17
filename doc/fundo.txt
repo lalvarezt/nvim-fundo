@@ -45,7 +45,7 @@ Default configuration:                                 *nvim-fundo-default-confi
     {
         archives_dir = vim.fn.stdpath('cache') .. path.separator .. 'fundo',
         limit_archives_size = 512,
-        baseline_max_file_size = 512,
+        baseline_max_file_size = 8,
         retention_days = nil,
         filter = function(path, bufnr) return true end,
         logging = {
@@ -69,8 +69,14 @@ Default configuration:                                 *nvim-fundo-default-confi
 
                                                 *fundo-baseline_max_file_size*
 `baseline_max_file_size`~
-        Maximum individual baseline snapshot size in MB. When omitted, this
-        follows `limit_archives_size` for compatibility with older setups.
+        Maximum individual baseline snapshot size in MiB. When omitted, this
+        is the smaller of 8 and `limit_archives_size`. Set to 0 to disable
+        baseline snapshots. An explicit value overrides the default.
+
+        Earlier versions used `limit_archives_size` as the default. Set this
+        option explicitly to your archive budget to retain that behavior.
+        This limit does not restrict native undo preservation through fallback
+        archives. Baseline writes are synchronous during file open.
 
                                                         *fundo-retention_days*
 `retention_days`~
@@ -83,6 +89,8 @@ Default configuration:                                 *nvim-fundo-default-confi
         Callback that returns `true` when Fundo should track a file. Defaults to
         accepting every otherwise supported buffer. Returning `false` excludes
         the file from fallback archives and baseline snapshots.
+        Exclusion does not erase previously saved archives or disable Neovim's
+        own persistent undo files.
 
                                                         *fundo-logging*
 `logging`~
@@ -113,6 +121,32 @@ baseline snapshot is used only when no usable native undo file is available.
 Successful transfers also write a versioned manifest under
 `archives_dir/.metadata`. Missing manifests from earlier Fundo versions do not
 prevent recovery; diagnostics report those records as legacy.
+
+Opening a file without editing it~
+        Opening an eligible file starts retaining its contents on disk, even
+        if you never edit or write the file. For a file with no previous undo
+        history or recovery archives:
+
+        1. Open contents A. Undo history is empty. Fundo saves A as a separate
+           baseline snapshot.
+        2. Close Neovim without editing, then change the file externally to B.
+        3. Reopen the file. The buffer contains B. `:undo` restores A, and
+           `:redo` restores B.
+
+        Reopening unchanged contents adds no undo step. Multiple external
+        edits between opens become one combined change. Intermediate versions
+        that Fundo never observed are unavailable.
+
+        Baseline capture requires Fundo to be enabled, `undofile` to be on,
+        and a named, supported buffer accepted by `filter`. The buffer must be
+        clean, modifiable, and have undo enabled. The snapshot must fit
+        `baseline_max_file_size`, and recovery requires it to survive pruning.
+
+        `:FundoStatus` reports a saved baseline without a fallback as
+        `baseline-only`. Set `baseline_max_file_size = 0` to disable baselines,
+        use `filter` to exclude paths from Fundo tracking, or set
+        `retention_days` to expire saved records. Neovim's persistent undo
+        files remain independent of these controls.
 
 Supported external-change cases:
 

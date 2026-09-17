@@ -27,6 +27,7 @@ local def = {
 ---@class FundoConfigModule: FundoConfig
 ---@field reload fun()
 local Config
+local defaultBaselineMaxFileSize = 8
 local loggingLevels = {trace = true, debug = true, info = true, warn = true, error = true}
 
 local function resolveLogging(resolved, userLogging)
@@ -59,12 +60,12 @@ local function reload()
     local user = fundo._config or {}
     local userLogging = type(user.logging) == 'table' and vim.deepcopy(user.logging) or nil
     local resolved = vim.tbl_deep_extend('keep', vim.deepcopy(user), def)
+    vim.validate('limit_archives_size', resolved.limit_archives_size, 'number')
     if resolved.baseline_max_file_size == nil then
-        resolved.baseline_max_file_size = resolved.limit_archives_size
+        resolved.baseline_max_file_size = math.min(defaultBaselineMaxFileSize, resolved.limit_archives_size)
     end
     resolveLogging(resolved, userLogging)
     vim.validate('archives_dir', resolved.archives_dir, 'string')
-    vim.validate('limit_archives_size', resolved.limit_archives_size, 'number')
     vim.validate('baseline_max_file_size', resolved.baseline_max_file_size, 'number')
     vim.validate('filter', resolved.filter, 'function')
     if resolved.retention_days ~= nil then
@@ -99,7 +100,7 @@ end
 Config = {
     archives_dir = def.archives_dir,
     limit_archives_size = def.limit_archives_size,
-    baseline_max_file_size = def.limit_archives_size,
+    baseline_max_file_size = defaultBaselineMaxFileSize,
     retention_days = nil,
     filter = def.filter,
     logging = vim.deepcopy(def.logging),

@@ -9,6 +9,7 @@ The goal of nvim-fundo is to make Neovim's undo file become stable and useful.
 ## Features
 
 - Restore undo history even if the file's content has been changed outside Neovim
+- Undo external changes after opening a file without editing it
 - Validate archive records with versioned metadata
 - Inspect preservation health with `:FundoStatus` and `:FundoDoctor`
 - Limit archive size, baseline size, retention age, and selected files
@@ -17,6 +18,8 @@ The goal of nvim-fundo is to make Neovim's undo file become stable and useful.
 
 - Restore undo history even if the file has been moved
 - Support useful use cases for undo file
+
+See [proposed improvements](./IMPROVEMENTS.md) for priorities and tradeoffs.
 
 ## Quickstart
 
@@ -72,6 +75,37 @@ native undo file is available. If a file later changes while Neovim is closed
 and Fundo cannot load native undo, Fundo uses the baseline only to create a
 normal Neovim undo step from the previous file contents to the current contents.
 After that, `:undo` and `:redo` are handled by Neovim.
+
+Opening an eligible file starts retaining its contents, even if you never edit
+or write it. For a file with no previous undo history or recovery archives:
+
+1. Open the file with contents A. Its undo history is empty, and Fundo saves A
+   as a separate baseline snapshot.
+2. Close Neovim without editing the file, then change its contents to B externally.
+3. Reopen the file. The buffer contains B, `:undo` restores A, and `:redo`
+   restores B.
+
+Reopening unchanged contents creates no undo step. Multiple external edits
+between opens become one combined change. Fundo cannot recover intermediate
+versions it never observed, and recovery requires the saved baseline to survive
+cleanup.
+
+Baseline capture requires Fundo to be enabled, `undofile` to be on, and a named,
+supported buffer accepted by `filter`. The buffer must be clean, modifiable,
+and have undo enabled. The snapshot must fit `baseline_max_file_size`.
+`:FundoStatus` reports a saved baseline without a fallback as `baseline-only`.
+
+Baseline writes are synchronous and retain a copy of the buffer text on disk.
+The default limit is 8 MiB per snapshot, or `limit_archives_size` if smaller.
+Earlier versions used the full archive budget as the baseline limit. To retain
+that behavior, set `baseline_max_file_size` explicitly to your archive budget.
+Files above the baseline limit can still have their native undo history
+preserved through fallback archives.
+
+Set `baseline_max_file_size = 0` to disable baseline snapshots. Use `filter` to
+exclude paths from all Fundo tracking, or `retention_days` to expire saved
+records. These controls do not disable Neovim's own persistent undo files.
+Excluding a path does not erase archives already saved for it.
 
 Fundo handles the common external-change cases:
 
@@ -164,9 +198,9 @@ The upstream BSD-3-Clause license is included in [LICENSE.promise-async](./LICEN
         default = 512
     },
     baseline_max_file_size = {
-        description = [[Maximum baseline snapshot size in MB. When omitted, it follows
-        limit_archives_size.]],
-        default = 512
+        description = [[Maximum baseline snapshot size in MiB. When omitted, it is the smaller
+        of 8 and limit_archives_size. Set to 0 to disable baseline snapshots.]],
+        default = 8
     },
     retention_days = {
         description = [[Optional maximum archive record age in days.]],
