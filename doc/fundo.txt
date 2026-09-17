@@ -256,6 +256,29 @@ Dirty buffer was not replaced by an external file change~
 ==============================================================================
 API                                                                 *fundo-api*
 
+                                                        *fundo.recovery()*
+                                                        *FundoRecovered*
+`require('fundo').recovery({bufnr})`~
+        Return a copy of the latest recovered change, or nil when none exists.
+        Defaults to the current buffer. Fields are `before` and `after` line
+        arrays, `name`, `bufnr`, `kind` (baseline or fallback), and `time`.
+        The pair survives baseline advancement until the buffer is detached.
+        `User FundoRecovered` delivers a copy of these fields as `event.data`
+        on the next main-loop turn after Fundo recovers a changed file.
+
+                                                        *fundo.preview()*
+                                                        *:FundoPreview*
+`require('fundo').preview({bufnr})`~
+        Open a new tab with two read-only diff buffers. Compare the recovered
+        previous contents with a snapshot of the source buffer's current
+        contents, including later unsaved edits. The source buffer and undo
+        position are unchanged. Close the preview tab to return to editing.
+
+        Defaults to the current buffer. Returns `tabpage`, `before_buffer`,
+        `after_buffer`, `before_window`, and `after_window`. Raises an error
+        when no recovered change is available. `:FundoPreview` uses the current
+        buffer.
+
                                                         *fundo.track()*
                                                         *:FundoTrack*
 `require('fundo').track({bufnr})`~

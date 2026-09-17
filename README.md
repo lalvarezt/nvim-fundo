@@ -57,6 +57,9 @@ Use undo file as usual.
 - `:FundoDoctor` checks archive permissions, usage, metadata, and orphaned
   artifacts.
 - `:FundoTrack` starts tracking the current buffer explicitly.
+- `:FundoPreview` compares the recovered previous contents with the current
+  buffer in a new tab. Both diff buffers are read-only snapshots. The source
+  buffer and its undo position remain unchanged.
 - `:FundoForget [path]` previews removal of Fundo records for a file or directory.
   `:FundoForget! [path]` removes them and stops tracking those paths in this
   Neovim session. Native undo files remain. `:FundoTrack` resumes a selected
@@ -172,6 +175,13 @@ pending snapshots; they do not survive restarting Neovim.
 New snapshots store Neovim buffer text independently of the source file's
 encoding and line endings. A clean file with no undo history can have a usable
 baseline without a fallback; `:FundoStatus` reports this as `baseline-only`.
+
+`require('fundo').recovery()` returns a copy of the latest recovered before/after
+pair for the current buffer. The pair remains available after synchronization
+advances the baseline and until the buffer is detached. The `User FundoRecovered`
+event delivers the pair and its source, recovery kind, buffer number, and time
+on the next main-loop turn. Previews compare the recovered previous contents
+with the buffer's current contents, including any later unsaved edits.
 
 Each successfully persisted fallback record has a versioned manifest in the
 private `.metadata` archive subdirectory. The manifest records the source,

@@ -500,6 +500,20 @@ function Undo:linesEqual(a, b)
     return true
 end
 
+function Undo:recordRecovery(before, after, kind)
+    if self:linesEqual(before, after) then return end
+    local recovery = {before = before, after = after, kind = kind, time = os.time(),
+        name = self.name, bufnr = self.bufnr}
+    self.recovery = recovery
+    vim.schedule(function()
+        if not api.nvim_buf_is_valid(self.bufnr) then return end
+        local ok, err = pcall(api.nvim_exec_autocmds, 'User', {
+            pattern = 'FundoRecovered', modeline = false, data = vim.deepcopy(recovery),
+        })
+        if not ok then pcall(log.warn, 'FundoRecovered handler failed:', err) end
+    end)
+end
+
 function Undo:loadBaseline(transfer)
     local baselineLines
     if transfer then
@@ -556,6 +570,9 @@ function Undo:loadBaseline(transfer)
     end
 
     self.isDirty = true
+    self:recordRecovery(baselineLines, currentLines, 'baseline')
+    self.lastAction = 'recovered-baseline'
+    self.lastUpdated = os.time()
     log.debug('loaded baseline archive:', self.baselinePath)
     return true
 end
@@ -571,9 +588,11 @@ function Undo:loadFileAndUndo(winid, transfer)
     vim.o.eventignore = 'all'
     local missingUndo = false
     local temporary
+    local beforeLines, afterLines
     local ok, err = pcall(function()
         local modified = vim.bo[self.bufnr].modified
         local lines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
+        afterLines = lines
         if transfer then
             -- Recovery must not depend on publishing to an unavailable archive.
             -- writefile's binary list representation maps embedded NUL to NL.
@@ -605,6 +624,7 @@ function Undo:loadFileAndUndo(winid, transfer)
                 end)
             end
         end
+        beforeLines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
         missingUndo = not fs.statSync(temporary or self.undoPath)
         local undoOk, undoErr = self:loadUndo(temporary)
         if not undoOk then
@@ -637,6 +657,7 @@ function Undo:loadFileAndUndo(winid, transfer)
         return false, missingUndo and 'missing-undo' or 'corrupt-undo'
     end
     log.debug('loaded fallback and undo:', 'fallback:', self.fallbackPath, 'undo:', self.undoPath)
+    self:recordRecovery(beforeLines, afterLines, 'fallback')
     return true
 end
 

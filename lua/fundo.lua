@@ -42,6 +42,21 @@ function M.forget(target, opts)
     return require('fundo.archive').forget(target, opts)
 end
 
+---Return a copy of the most recent recovered change for a loaded buffer.
+---@param bufnr? number
+function M.recovery(bufnr)
+    if bufnr == nil or bufnr == 0 then bufnr = vim.api.nvim_get_current_buf() end
+    local manager = require('fundo.manager')
+    local tracked = manager.undos and manager.undos[bufnr]
+    return tracked and tracked.recovery and vim.deepcopy(tracked.recovery) or nil
+end
+
+---Compare the recovered previous contents with a snapshot of the current buffer.
+---@param bufnr? number
+function M.preview(bufnr)
+    return require('fundo.preview').show(bufnr)
+end
+
 ---Setup configuration and enable fundo
 ---@param opts? FundoConfig
 function M.setup(opts)
