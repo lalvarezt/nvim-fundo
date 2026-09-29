@@ -70,6 +70,53 @@ describe('generation storage.', function()
         assert.truthy(publish('after lock').generation)
     end)
 
+    it('serializes acquisition while a dead owner is being reclaimed.', function()
+        local lock = storage.directory(fallback) .. '.lock'
+        fs.mkdirpSync(lock, 448)
+        local deadPid = 99999999
+        local alive, _, code = vim.loop.kill(deadPid, 0)
+        assert.falsy(alive)
+        assert.equal('ESRCH', code)
+        fs.writeFileSync(lock .. '/owner', fn.json_encode({pid = deadPid, host = vim.loop.os_gethostname()}))
+        local open = fs.openSync
+        local competitor, entered, attempted = nil, false, false
+        fs.openSync = function(target, ...)
+            if target == lock .. '/reaping' and not attempted then
+                attempted = true
+                competitor = coroutine.create(function()
+                    pcall(storage.withLock, fallback, function()
+                        entered = true
+                        coroutine.yield()
+                    end)
+                end)
+                assert(coroutine.resume(competitor))
+            end
+            return open(target, ...)
+        end
+        local ok, err = pcall(storage.withLock, fallback, function() end)
+        fs.openSync = open
+        if competitor and coroutine.status(competitor) == 'suspended' then
+            assert(coroutine.resume(competitor))
+        end
+        if not ok then error(err) end
+        assert.True(attempted)
+        assert.False(entered)
+        assert.truthy(publish('after reclamation').generation)
+    end)
+
+    it('preserves history when an acquisition guard survives interruption.', function()
+        local first = publish('first')
+        local claim = storage.directory(fallback) .. '.claim'
+        fs.mkdirpSync(claim, 448)
+        fs.writeFileSync(claim .. '/owner', fn.json_encode({pid = 99999999, host = vim.loop.os_gethostname()}))
+        local ok, err = pcall(publish, 'second', first.generation)
+        assert.False(ok)
+        assert.truthy(tostring(err):find(claim, 1, true))
+        assert.equal('first\n', storage.read(fallback).contents)
+        fn.delete(claim, 'rf')
+        assert.truthy(publish('second', first.generation).generation)
+    end)
+
     it('accounts for damaged metadata and removes it only while it remains invalid.', function()
         publish('first')
         local pointer = storage.directory(fallback) .. '/current'

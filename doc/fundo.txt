@@ -214,7 +214,11 @@ Committed generations~
         Per-record locks and version checks prevent stale Fundo sessions from
         replacing newer archives. A conflict remains pending. Preserve local
         edits and reopen the file before retrying. Dead locks on the same host
-        are reclaimed. Native undo files remain under Neovim's control.
+        are reclaimed. Acquisition also uses a `.claim` guard, which is never
+        reclaimed automatically. If acquisition was interrupted, the sync error
+        identifies its path. Stop all Fundo writers using that archive, inspect
+        the guard's `owner` file, and remove the abandoned guard before retrying.
+        Native undo files remain under Neovim's control.
         Generation copies protect recovery from competing native undo writes.
         Process interruption is covered; power-loss durability is not promised.
 

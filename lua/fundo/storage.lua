@@ -131,16 +131,28 @@ end
 local function withDirectoryLock(dir, callback)
     fs.mkdirpSync(path.dirname(dir), directoryMode)
     local lock = dir .. '.lock'
-    local acquired = fs.mkdirSync(lock, directoryMode)
-    if not acquired then
-        reap(lock)
-        acquired = fs.mkdirSync(lock, directoryMode)
-    end
-    assert(acquired, 'archive is busy in another process: ' .. dir)
-    local ok, result = pcall(function()
-        fs.writeFileSync(path.join(lock, 'owner'), fn.json_encode({pid = uv.os_getpid(), host = uv.os_gethostname()}))
-        return callback()
+    -- All acquisition and reclamation share a stable guard. Never automatically
+    -- reap this guard: doing so would move the same replacement race up a level.
+    local claim = dir .. '.claim'
+    assert(fs.mkdirSync(claim, directoryMode), 'archive acquisition is busy or interrupted: ' .. claim)
+    local owner = fn.json_encode({pid = uv.os_getpid(), host = uv.os_gethostname()})
+    local claimed, claimError = pcall(function()
+        fs.writeFileSync(path.join(claim, 'owner'), owner)
+        local acquired = fs.mkdirSync(lock, directoryMode)
+        if not acquired then
+            reap(lock)
+            acquired = fs.mkdirSync(lock, directoryMode)
+        end
+        assert(acquired, 'archive is busy in another process: ' .. dir)
+        local ownerOk, ownerError = pcall(fs.writeFileSync, path.join(lock, 'owner'), owner)
+        if not ownerOk then
+            release(lock)
+            error(ownerError, 0)
+        end
     end)
+    release(claim)
+    if not claimed then error(claimError, 0) end
+    local ok, result = pcall(callback)
     release(lock)
     if not ok then error(result, 0) end
     return result

@@ -201,7 +201,11 @@ interruption, not storage-device failure or power loss.
 Per-record locks coordinate Fundo processes sharing the same archive directory.
 A stale writer reports a conflict instead of replacing a newer generation.
 Preserve any local edits, then reopen the file to use the current generation.
-Dead locks on the same host are reclaimed. Native undo files remain under
+Dead locks on the same host are reclaimed. Acquisition uses a separate `.claim`
+guard that is never reclaimed automatically. If acquisition was interrupted,
+the sync error identifies the guard path. Stop all Fundo writers using that
+archive, inspect the guard's `owner` file, and remove the abandoned guard before
+retrying. Native undo files remain under
 Neovim's control; committed copies protect Fundo recovery from competing native
 undo writes.
 
