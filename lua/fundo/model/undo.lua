@@ -594,14 +594,14 @@ function Undo:loadFileAndUndo(winid, transfer)
         view = utils.saveView(winid)
     end
 
+    local lines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
+    local modified = vim.bo[self.bufnr].modified
     local ei = vim.o.eventignore
     vim.o.eventignore = 'all'
     local missingUndo = false
     local temporary
     local beforeLines, afterLines
     local ok, err = pcall(function()
-        local modified = vim.bo[self.bufnr].modified
-        local lines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
         afterLines = lines
         if transfer then
             -- Recovery must not depend on publishing to an unavailable archive.
@@ -638,11 +638,6 @@ function Undo:loadFileAndUndo(winid, transfer)
         missingUndo = not fs.statSync(temporary or self.undoPath)
         local undoOk, undoErr = self:loadUndo(temporary)
         if not undoOk then
-            api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
-            vim.bo[self.bufnr].modified = modified
-            if winid then
-                utils.restView(winid, view)
-            end
             pcall(log.warn, 'failed to load undo file:', self.undoPath, undoErr)
             error(undoErr or ('failed to load undo file: ' .. self.undoPath))
         end
@@ -660,14 +655,42 @@ function Undo:loadFileAndUndo(winid, transfer)
         end
     end)
     if temporary then pcall(fs.unlinkSync, temporary) end
-    vim.o.eventignore = ei
     if not ok then
+        local restored, restoreErr = pcall(function()
+            if not self:linesEqual(api.nvim_buf_get_lines(self.bufnr, 0, -1, false), lines) then
+                api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
+            end
+            vim.bo[self.bufnr].modified = modified
+        end)
+        if not restored then
+            -- Retain the original text even if the source buffer became unwritable.
+            self.recoveryBackup = {lines = lines, error = tostring(restoreErr)}
+            local backupOk, backup = pcall(function()
+                local filename = fn.tempname() .. '.fundo-recovery'
+                fs.writeFileSync(filename, table.concat(lines, '\n') .. '\n')
+                return filename
+            end)
+            if backupOk then self.recoveryBackup.path = backup end
+            local bufferOk, bufnr = pcall(function()
+                local buffer = api.nvim_create_buf(true, true)
+                api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
+                vim.bo[buffer].modified = true
+                return buffer
+            end)
+            if bufferOk then self.recoveryBackup.bufnr = bufnr end
+            local message = 'Fundo recovery rollback failed for ' .. self.name .. ': ' .. tostring(restoreErr)
+            if backupOk then message = message .. '; original text saved to ' .. backup end
+            if bufferOk then message = message .. '; recovery buffer ' .. bufnr end
+            vim.schedule(function() vim.notify(message, vim.log.levels.ERROR) end)
+        end
+        vim.o.eventignore = ei
         pcall(log.warn, 'failed to load fallback archive:', self.fallbackPath, err)
         if winid and view and utils.isWinValid(winid) then
             pcall(utils.restView, winid, view)
         end
         return false, missingUndo and 'missing-undo' or 'corrupt-undo'
     end
+    vim.o.eventignore = ei
     log.debug('loaded fallback and undo:', 'fallback:', self.fallbackPath, 'undo:', self.undoPath)
     self:recordRecovery(beforeLines, afterLines, 'fallback')
     return true

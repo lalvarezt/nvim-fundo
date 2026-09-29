@@ -21,6 +21,54 @@ describe('recovery integrity.', function()
         }).lines
     end
 
+    for _, stage in ipairs({'undo', 'restore', 'rollback'}) do
+        it('rolls back current text after a recovery exception at ' .. stage .. '.', function()
+            local lines = run(([=[
+                local api, fn = vim.api, vim.fn
+                fn.writefile({'original'}, FILE)
+                vim.cmd('edit ' .. fn.fnameescape(FILE))
+                api.nvim_buf_set_lines(0, 0, -1, false, {'archived'})
+                vim.cmd('write')
+                local manager = require('fundo.manager')
+                assert(manager:syncAllSync())
+                local u = manager:get(api.nvim_get_current_buf())
+                local archived = assert(require('fundo.storage').read(u.fallbackPath))
+                api.nvim_buf_set_lines(0, 0, -1, false, {'current external text'})
+                vim.bo.modified = false
+                local loadUndo, setLines = u.loadUndo, api.nvim_buf_set_lines
+                local stage = %q
+                if stage == 'undo' then
+                    u.loadUndo = function() error('injected undo exception') end
+                else
+                    local calls = 0
+                    api.nvim_buf_set_lines = function(...)
+                        calls = calls + 1
+                        if calls == 2 or (stage == 'rollback' and calls > 2 and select(1, ...) == u.bufnr) then
+                            error('injected restoration exception')
+                        end
+                        return setLines(...)
+                    end
+                end
+                local loaded = u:loadFileAndUndo(nil, archived)
+                u.loadUndo, api.nvim_buf_set_lines = loadUndo, setLines
+                assert(not loaded)
+                assert(vim.o.eventignore ~= 'all')
+                if stage == 'rollback' then
+                    local backup = assert(u.recoveryBackup)
+                    assert(fn.readfile(backup.path)[1] == 'current external text')
+                    assert(api.nvim_buf_get_lines(backup.bufnr, 0, -1, false)[1] == 'current external text')
+                    fn.delete(backup.path)
+                    WriteReport({'current external text', fn.readfile(FILE)[1]})
+                else
+                    assert(not vim.bo.modified)
+                    WriteReport({BufferText(), fn.readfile(FILE)[1]})
+                end
+                vim.cmd('quitall!')
+            ]=]):format(stage))
+            assert.same({'current external text', 'archived'}, lines)
+        end)
+    end
+
     for _, scenario in ipairs({
         {blocked = false, mode = 'sync'}, {blocked = true, mode = 'sync'},
         {blocked = false, mode = 'async'}, {blocked = true, mode = 'async'},
