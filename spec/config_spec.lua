@@ -25,6 +25,7 @@ describe('config module.', function()
             limit_archives_size = 1,
             baseline_max_file_size = 0.5,
             retention_days = 7,
+            prune_policy = 'delete',
             filter = firstFilter,
             logging = {
                 enabled = true,
@@ -36,6 +37,7 @@ describe('config module.', function()
         assert.equal(1, config.limit_archives_size)
         assert.equal(0.5, config.baseline_max_file_size)
         assert.equal(7, config.retention_days)
+        assert.equal('delete', config.prune_policy)
         assert.equal(firstFilter, config.filter)
         assert.True(config.logging.enabled)
         assert.equal('debug', config.logging.level)
@@ -54,6 +56,7 @@ describe('config module.', function()
         assert.equal(2, config.limit_archives_size)
         assert.equal(2, config.baseline_max_file_size)
         assert.Nil(config.retention_days)
+        assert.equal('preserve', config.prune_policy)
         assert.True(config.filter('anything', 0))
         assert.False(config.logging.enabled)
         assert.equal('error', config.logging.level)
@@ -86,6 +89,7 @@ describe('config module.', function()
     it('rejects invalid storage policy config.', function()
         assert.False(pcall(fundo.setup, {baseline_max_file_size = -1}))
         assert.False(pcall(fundo.setup, {retention_days = -1}))
+        assert.False(pcall(fundo.setup, {prune_policy = 'unknown'}))
         assert.False(pcall(fundo.setup, {filter = 'all'}))
         assert.False(pcall(fundo.setup, {track_on = 'sometimes'}))
     end)

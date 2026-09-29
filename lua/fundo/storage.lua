@@ -192,18 +192,25 @@ function M.size(fallbackPath)
     return directorySize(M.directory(fallbackPath))
 end
 
-local function cleanup(fallbackPath, current, previous)
+local function cleanup(fallbackPath, current, previous, oldHead)
     local dir = M.directory(fallbackPath)
     for _, item in ipairs(entries(dir)) do
         if item.name ~= 'current' and item.name ~= current and item.name ~= previous then
-            fn.delete(path.join(dir, item.name), 'rf')
+            local disposable = require('fundo.config').prune_policy == 'delete'
+            if not disposable and oldHead and (item.name == oldHead.current or item.name == oldHead.previous) then
+                -- Only retire a known, complete committed generation. Keep
+                -- damaged or unpublished captures available for inspection.
+                disposable = pcall(readGeneration, fallbackPath, item.name)
+            end
+            if disposable then fn.delete(path.join(dir, item.name), 'rf') end
         end
     end
 end
 
 function M.publish(transfer, persist)
     return M.withLock(transfer.fallbackPath, function()
-        local current = M.token(transfer.fallbackPath)
+        local oldHead = head(transfer.fallbackPath)
+        local current = oldHead and oldHead.current or false
         if current and current ~= transfer.expectedGeneration then
             error('archive changed in another session; reopen the file before retrying')
         end
@@ -253,7 +260,7 @@ function M.publish(transfer, persist)
             error(publishError, 0)
         end
         transfer.generation = id
-        cleanup(transfer.fallbackPath, id, prior and prior.generation or nil)
+        cleanup(transfer.fallbackPath, id, prior and prior.generation or nil, oldHead)
         return id
     end)
 end
@@ -296,17 +303,22 @@ function M.records(archivesDir)
 end
 
 function M.removeInvalid(dir)
-    withDirectoryLock(dir, function()
+    return withDirectoryLock(dir, function()
         local archivesDir = path.dirname(path.dirname(dir))
         for _, record in ipairs(M.records(archivesDir)) do
             if record.directory == dir and record.error then
-                assert(fn.delete(dir, 'rf') == 0, 'cannot remove invalid generation')
+                -- Invalid metadata does not prove that the text and undo copies
+                -- are worthless. Keep them until the user explicitly removes them.
+                return false
             end
         end
+        return true
     end)
 end
 
 function M.clean(archivesDir)
+    -- Unreferenced captures can be the only remaining copy after interruption.
+    if require('fundo.config').prune_policy ~= 'delete' then return end
     for _, item in ipairs(entries(M.root(archivesDir))) do
         if item.kind == 'directory' and item.name:match('^[a-f0-9]+$') then
             local dir = path.join(M.root(archivesDir), item.name)

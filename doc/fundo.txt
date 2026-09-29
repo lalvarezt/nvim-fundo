@@ -47,6 +47,7 @@ Default configuration:                                 *nvim-fundo-default-confi
         limit_archives_size = 512,
         baseline_max_file_size = 8,
         retention_days = nil,
+        prune_policy = 'preserve',
         track_on = 'open',
         filter = function(path, bufnr) return true end,
         logging = {
@@ -64,9 +65,20 @@ Default configuration:                                 *nvim-fundo-default-confi
 
                                                         *fundo-limit_archives_size*
 `limit_archives_size`~
-        Maximum archive directory size in MB. When the size is exceeded, older
-        archive records are pruned by modified time. Fallbacks, baselines, and
-        manifests, and committed generations all count toward this limit.
+        Archive budget in MiB. With the default preserve policy, excess usage
+        produces a warning and a :FundoDoctor issue without deleting recovery
+        records. With prune_policy=delete, older records are pruned by modified
+        time. Fallbacks, baselines, manifests, and generations count toward it.
+
+                                                        *fundo-prune_policy*
+`prune_policy`~
+        Either 'preserve' or 'delete'. Defaults to 'preserve'. Preservation keeps
+        records under quota or age pressure, so usage can exceed the budget.
+        Deletion enables automatic eviction and can remove the last recovery
+        copy. Damaged generation directories remain for manual inspection.
+        Preservation also retains unreferenced captures after interruption.
+        Redundant complete committed generations can still be retired after
+        their replacement is synchronized.
 
                                                 *fundo-baseline_max_file_size*
 `baseline_max_file_size`~
@@ -85,8 +97,9 @@ Default configuration:                                 *nvim-fundo-default-confi
                                                         *fundo-retention_days*
 `retention_days`~
         Optional maximum archive record age in days. Defaults to `nil`, which
-        disables age-based expiry. Expired fallback, baseline, and manifest
-        artifacts are pruned together.
+        disables age-based checks. Expired records produce diagnostics under
+        the preserve policy. With prune_policy=delete, expired fallback,
+        baseline, manifest, and generation artifacts are pruned together.
 
                                                                 *fundo-filter*
 `filter(path, bufnr)`~
@@ -208,8 +221,8 @@ Committed generations~
         Recovery transfers store checksummed text and undo data in the private
         `.generations` directory. An atomic pointer publishes a complete
         generation. The previous complete generation remains available if the
-        current generation is damaged. Incomplete generations are cleaned on
-        startup or the next successful save. Old archives migrate on save.
+        current generation is damaged. The preserve policy retains interrupted
+        captures for inspection. Old archives migrate on save.
 
         Per-record locks and version checks prevent stale Fundo sessions from
         replacing newer archives. A conflict remains pending. Preserve local
@@ -259,8 +272,9 @@ No undo history after an external change~
         `:FundoDoctor` for archive-wide diagnostics.
 
 Archive directory uses disk space~
-        This is expected. Lower `limit_archives_size` to prune old fallback
-        records more aggressively, set `retention_days`, or use
+        This is expected. Automatic eviction requires `prune_policy='delete'`
+        and can remove the last recovery copy. Set `limit_archives_size` and
+        `retention_days` to control that policy, or use
         `baseline_max_file_size` and `filter` to limit what is stored.
 
 Archive directory was deleted~

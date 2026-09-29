@@ -256,6 +256,9 @@ function M.doctor()
     end
 
     local limitBytes = config.limit_archives_size * 1024 * 1024
+    if expired > 0 then
+        issue('archive-retention', ('%d archive records exceed the configured retention age'):format(expired))
+    end
     if totalSize > limitBytes then
         issue('archive-size', 'archive usage exceeds the configured limit')
     end
@@ -292,6 +295,7 @@ function M.doctor()
     return {
         ok = #issues == 0,
         archive_dir = config.archives_dir,
+        prune_policy = config.prune_policy,
         size = totalSize,
         limit = limitBytes,
         records = vim.tbl_count(records),
@@ -358,6 +362,7 @@ function M.formatDoctor(value)
     local lines = {
         'Fundo doctor: ' .. (value.ok and 'OK' or 'issues found'),
         '  archive directory: ' .. value.archive_dir,
+        '  pruning policy: ' .. (value.prune_policy or 'preserve'),
         ('  usage: %d / %d bytes'):format(value.size, value.limit),
         ('  records: %d (%d legacy, %d expired)'):format(
             value.records,

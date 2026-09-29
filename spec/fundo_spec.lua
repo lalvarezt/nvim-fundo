@@ -1360,6 +1360,7 @@ describe('fundo integration.', function()
             archives_dir = archivesDir,
             limit_archives_size = 16,
             retention_days = 1,
+            prune_policy = 'delete',
         })
         open_file_with_history({'one'}, {'one', 'two'})
 
@@ -1368,6 +1369,7 @@ describe('fundo integration.', function()
         for _, recordPath in ipairs(recordPaths) do
             uv.fs_utime(recordPath, 100, 100)
         end
+        uv.fs_utime(require('fundo.storage').directory(fallback) .. '/current', 100, 100)
 
         async(function()
             await(manager:scanArchivesDir())
@@ -1390,6 +1392,7 @@ describe('fundo integration.', function()
         require('fundo').setup({
             archives_dir = archivesDir,
             limit_archives_size = 16,
+            prune_policy = 'delete',
         })
 
         fn.writefile({'aaaaaaaaaaaaaaaaaaaa'}, file_a)
@@ -1414,6 +1417,7 @@ describe('fundo integration.', function()
                 size = size + stat.size
                 uv.fs_utime(recordPath, timestamp, timestamp)
             end
+            uv.fs_utime(require('fundo.storage').directory(fallback) .. '/current', timestamp, timestamp)
             return fallback, recordPaths, size + require('fundo.storage').size(fallback)
         end
 
@@ -1481,6 +1485,7 @@ describe('fundo integration.', function()
         local archive = path.join(archivesDir, 'stale')
 
         fn.writefile({'stale archive'}, archive)
+        manager.prunePolicy = 'delete'
         manager.limitArchivesSize = 0
         fs.unlink = function()
             return promise.reject('unlink failed')

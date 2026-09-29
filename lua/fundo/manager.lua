@@ -197,6 +197,7 @@ function Manager:scanArchivesDir()
                 or '@generation-' .. path.basename(generation.directory)
             local record = records[key] or {name = key, mtime = generation.mtime}
             record.generation = generation
+            record.mtime = math.max(record.mtime or 0, generation.mtime)
             records[key] = record
         end
         local stats = vim.tbl_values(records)
@@ -216,6 +217,26 @@ function Manager:scanArchivesDir()
             end
         end
         local cutoff = self.retentionDays and os.time() - self.retentionDays * 24 * 60 * 60 or nil
+        if self.prunePolicy ~= 'delete' then
+            local expired = 0
+            for _, record in ipairs(stats) do
+                for _, artifact in ipairs({record.fallback or false, record.baseline or false,
+                    record.manifest or false, record.generation or false}) do
+                    if artifact then size = size + artifact.size end
+                end
+                if cutoff and record.mtime < cutoff then expired = expired + 1 end
+            end
+            self.pruningStatus = {policy = 'preserve', bytes = size, limit = limit, expired = expired}
+            if size > limit or expired > 0 then
+                vim.schedule(function()
+                    vim.notify(('Fundo preserved recovery archives: %d bytes, limit %d, %d expired records. '
+                        .. 'Inspect :FundoDoctor; prune_policy=preserve keeps saved work.'):format(size, limit, expired),
+                        vim.log.levels.WARN)
+                end)
+            end
+            log.debug('archive scan preserved records:', 'bytes:', size, 'limit:', limit, 'expired:', expired)
+            return
+        end
         for _, record in ipairs(stats) do
             local essentialSize = record.fallback and record.fallback.size or 0
             essentialSize = essentialSize + (record.manifest and record.manifest.size or 0)
@@ -236,7 +257,12 @@ function Manager:scanArchivesDir()
             else
                 if record.generation and record.generation.error then
                     local dir = record.generation.directory
-                    tasks[dir] = onMain(function() storage.removeInvalid(dir) end)
+                    tasks[dir] = onMain(function()
+                        if not storage.removeInvalid(dir) then
+                            vim.notify('Fundo preserved damaged generations for inspection: ' .. dir,
+                                vim.log.levels.WARN)
+                        end
+                    end)
                 elseif record.generation then
                     local fallbackPath = record.generation.fallbackPath
                     tasks[fallbackPath] = onMain(function()
@@ -406,6 +432,8 @@ function Manager:initialize()
     self.archivesDir = path.normalize(config.archives_dir)
     self.limitArchivesSize = config.limit_archives_size
     self.retentionDays = config.retention_days
+    self.prunePolicy = config.prune_policy
+    self.pruningStatus = nil
     fs.mkdirpSync(self.archivesDir, archiveDirMode)
     if not utils.isWindows() then
         fs.chmodSync(self.archivesDir, archiveDirMode)

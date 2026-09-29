@@ -53,7 +53,7 @@ the current text.
 | Retry behavior | Failed fallback writes, failed baseline writes, invalid buffers after unload, source disappearance after unload, and an older pending transfer competing with a newer save |
 | Text | Empty lines, trailing carriage returns, UTF-8, embedded NUL bytes, UTF-16 baselines, and legacy UTF-16 baselines without metadata |
 | Storage identity | Files ending in `.base`, same-named files with `undodir=.`, and migration of ambiguous old archive names when metadata identifies their source |
-| Storage policy | Baseline-only retention, complete-record expiry, archive size pruning, baseline limits, failed pruning, missing archive directories, and private permissions |
+| Storage policy | Default preservation under quota and age pressure, explicit automatic deletion, damaged generation preservation, baseline limits, failed pruning, missing archive directories, and private permissions |
 | Configuration | Filters, repeated setup, failed setup, disabling `undofile` after attachment, and enabling Fundo over a modified buffer |
 | Diagnostics | Healthy records, usable baseline-only records, invalid metadata, and existing status and doctor checks |
 | Baseline capture | Early size rejection without copying lines, deferred persistence, unchanged-write suppression, eligibility reasons, and persisted capture time |

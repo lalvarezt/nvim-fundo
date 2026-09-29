@@ -196,6 +196,7 @@ describe('baseline metadata policy.', function()
         it('prunes existing orphan metadata under the ' .. policy .. ' policy.', function()
             local lines = run(([[
                 local manager = require('fundo.manager')
+                manager.prunePolicy = 'delete'
                 local fs = require('fundo.fs')
                 local manifest = require('fundo.manifest')
                 local metadata = manifest.path(manager.archivesDir .. '/orphan')

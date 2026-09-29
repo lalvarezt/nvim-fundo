@@ -116,8 +116,9 @@ Files above the baseline limit can still have their native undo history
 preserved through fallback archives.
 
 Set `baseline_max_file_size = 0` to disable baseline snapshots. Use `filter` to
-exclude paths from all Fundo tracking, or `retention_days` to expire saved
-records. These controls do not disable Neovim's own persistent undo files.
+exclude paths from all Fundo tracking, or `retention_days` to flag old saved
+records. Automatic expiry requires `prune_policy = 'delete'`. These controls do
+not disable Neovim's own persistent undo files.
 Excluding a path does not erase archives already saved for it.
 
 Set `track_on = 'write'` to start new records after the first write, or
@@ -217,11 +218,17 @@ Neovim's control; committed copies protect Fundo recovery from competing native
 undo writes.
 
 The fallback archives, manifests, baseline snapshots, and generations use disk space.
-`limit_archives_size` caps their total size in MB. `baseline_max_file_size`
-independently limits one baseline snapshot, and `retention_days` optionally
-expires complete records by age. A `filter` callback can exclude paths from
-tracking. Pruning removes an expired or over-budget record together with its
-metadata.
+The default `prune_policy = 'preserve'` keeps recovery records when they exceed
+`limit_archives_size` or `retention_days`. Scans warn about pressure, and
+`:FundoDoctor` reports quota and age issues. Disk usage can exceed the budget.
+Set `prune_policy = 'delete'` to automatically remove expired or over-budget
+records together with their metadata. That policy can delete the last recovery
+copy. Damaged generation directories remain in place for inspection and require
+explicit removal. The preservation policy also keeps unreferenced captures left
+by interrupted publication. Redundant, complete committed generations can still
+be retired after their replacements are synchronized.
+`baseline_max_file_size` independently limits one baseline snapshot, and `filter`
+can exclude paths from tracking.
 
 Fundo follows buffer paths changed with `:file` or `:saveas`. After an external
 move while Neovim is closed, open the destination and run
@@ -260,9 +267,14 @@ The upstream BSD-3-Clause license is included in [LICENSE.promise-async](./LICEN
         default = vim.fn.stdpath('cache') .. path.separator .. 'fundo'
     },
     limit_archives_size = {
-        description = [[Limit the archives directory size, unit is MB(megabyte), elder files will be
-        removed based on their modified time]],
+        description = [[Archive budget in MiB. The preserve policy reports excess usage.
+        The delete policy removes older records to meet the budget.]],
         default = 512
+    },
+    prune_policy = {
+        description = [[Preserve recovery records under quota and age pressure, or use delete
+        to enable automatic eviction. Damaged generations require explicit removal.]],
+        default = 'preserve'
     },
     baseline_max_file_size = {
         description = [[Maximum baseline snapshot size in MiB. When omitted, it is the smaller
