@@ -87,15 +87,19 @@ describe('recovery integrity.', function()
                     local backup = assert(u.recoveryBackup)
                     assert(fn.readfile(backup.path)[1] == 'current external text')
                     assert(api.nvim_buf_get_lines(backup.bufnr, 0, -1, false)[1] == 'current external text')
-                    fn.delete(backup.path)
-                    WriteReport({'current external text', fn.readfile(FILE)[1]})
+                    WriteReport({'current external text', fn.readfile(FILE)[1], backup.path})
                 else
                     assert(not vim.bo.modified)
                     WriteReport({BufferText(), fn.readfile(FILE)[1]})
                 end
                 vim.cmd('quitall!')
             ]=]):format(stage))
-            assert.same({'current external text', 'archived'}, lines)
+            assert.same({'current external text', 'archived'}, {lines[1], lines[2]})
+            if stage == 'rollback' then
+                assert.equal(1, fn.filereadable(lines[3]))
+                assert.same({'current external text'}, fn.readfile(lines[3]))
+                fn.delete(lines[3])
+            end
         end)
     end
 

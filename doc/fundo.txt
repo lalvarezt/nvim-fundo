@@ -240,6 +240,11 @@ Committed generations~
         device support. Windows synchronizes file data only. Physical power loss
         and device failures were not tested.
 
+        If recovery rollback fails, Fundo retains the original text in a recovery
+        buffer and attempts a private backup under stdpath('state')/fundo-recovery.
+        The error identifies the backup and buffer. Emergency backups survive
+        editor exit and are not automatically pruned.
+
 Moved files~
         Fundo follows buffer paths changed with `:file` or `:saveas`. After an
         external move while Neovim is closed, open the destination and use

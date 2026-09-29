@@ -201,6 +201,10 @@ before rename and directory entries afterward on Unix. Generation data reaches
 that synchronization point before the commit pointer is published, and older
 generations are removed only after the pointer's directory is synchronized.
 Synchronization failures remain retryable and are reported as failures.
+If recovery cannot restore the original buffer after an exception, Fundo keeps
+the original text in a recovery buffer and attempts a private backup under
+`stdpath('state')/fundo-recovery`. The error reports the backup path and buffer
+number. These emergency files survive editor exit and are not automatically pruned.
 Durability depends on the filesystem and device honoring these operations.
 Windows synchronizes file data but does not provide directory synchronization
 through this implementation. Physical power loss and device failures were not

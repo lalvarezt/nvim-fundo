@@ -672,7 +672,9 @@ function Undo:loadFileAndUndo(winid, transfer)
             -- Retain the original text even if the source buffer became unwritable.
             self.recoveryBackup = {lines = lines, error = tostring(restoreErr)}
             local backupOk, backup = pcall(function()
-                local filename = fn.tempname() .. '.fundo-recovery'
+                local directory = path.join(fn.stdpath('state'), 'fundo-recovery')
+                fs.mkdirpSync(directory, archiveDirMode)
+                local filename = path.join(directory, ('%d-%.0f.txt'):format(vim.loop.os_getpid(), vim.loop.hrtime()))
                 fs.writeFileSync(filename, table.concat(lines, '\n') .. '\n')
                 return filename
             end)
