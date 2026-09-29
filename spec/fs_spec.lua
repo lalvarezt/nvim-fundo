@@ -105,15 +105,18 @@ describe('fs module on Unix.', function()
     describe('synchronous atomic write,', function()
         local target
         local write
+        local sync, rename
 
         before_each(function()
             target = vim.fn.tempname()
             vim.fn.writefile({'original'}, target, 'b')
             write = vim.loop.fs_write
+            sync, rename = vim.loop.fs_fsync, vim.loop.fs_rename
         end)
 
         after_each(function()
             vim.loop.fs_write = write
+            vim.loop.fs_fsync, vim.loop.fs_rename = sync, rename
             os.remove(target)
             for _, p in ipairs(vim.fn.glob(target .. '.__*', false, true)) do
                 os.remove(p)
@@ -171,6 +174,40 @@ describe('fs module on Unix.', function()
 
             assert.equal(0, fs.statSync(target).size)
             assert.same({}, vim.fn.glob(target .. '.__*', false, true))
+        end)
+
+        it('synchronizes file data before rename and directory entries afterward', function()
+            local calls = {}
+            vim.loop.fs_fsync = function(fd)
+                calls[#calls + 1] = vim.loop.fs_fstat(fd).type
+                return sync(fd)
+            end
+            vim.loop.fs_rename = function(...)
+                calls[#calls + 1] = 'rename'
+                return rename(...)
+            end
+            fs.writeFileSync(target, 'durable text')
+            assert.same({'file', 'rename', 'directory'}, calls)
+        end)
+
+        it('keeps the old file if synchronizing replacement data fails', function()
+            vim.loop.fs_fsync = function() return nil, 'injected fsync failure' end
+            local ok, err = pcall(fs.writeFileSync, target, 'replacement')
+            assert.False(ok)
+            assert.truthy(tostring(err):find('injected fsync failure', 1, true))
+            assert.same({'original'}, vim.fn.readfile(target, 'b'))
+            assert.same({}, vim.fn.glob(target .. '.__*', false, true))
+        end)
+
+        it('reports failure when renamed directory entries cannot be synchronized', function()
+            vim.loop.fs_fsync = function(fd)
+                if vim.loop.fs_fstat(fd).type == 'directory' then return nil, 'injected directory fsync failure' end
+                return sync(fd)
+            end
+            local ok, err = pcall(fs.writeFileSync, target, 'replacement')
+            assert.False(ok)
+            assert.truthy(tostring(err):find('injected directory fsync failure', 1, true))
+            assert.same({'replacement'}, vim.fn.readfile(target, 'b'))
         end)
     end)
     describe('synchronous mkdirp,', function()

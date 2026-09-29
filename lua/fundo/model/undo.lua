@@ -467,7 +467,7 @@ function Undo:transferSnapshot()
         snapshot_format = 'buffer-lines-v1',
         baseline_format = 'buffer-lines-v1',
         capturedAt = os.time(),
-        expectedGeneration = self.generation,
+        expectedGeneration = self.pendingTransfer and self.pendingTransfer.expectedGeneration or self.generation,
         changedtick = api.nvim_buf_get_changedtick(self.bufnr),
     }
 end

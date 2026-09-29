@@ -195,8 +195,15 @@ Recovery transfers also keep immutable generations in `archives_dir/.generations
 Each generation includes checksummed buffer text and undo data. An atomic pointer
 selects the committed generation, with the previous complete generation retained
 as a fallback. An interrupted transfer cannot publish half a generation. Old
-archives migrate on their next successful save. These guarantees cover process
-interruption, not storage-device failure or power loss.
+archives migrate on their next successful save. Writes synchronize file data
+before rename and directory entries afterward on Unix. Generation data reaches
+that synchronization point before the commit pointer is published, and older
+generations are removed only after the pointer's directory is synchronized.
+Synchronization failures remain retryable and are reported as failures.
+Durability depends on the filesystem and device honoring these operations.
+Windows synchronizes file data but does not provide directory synchronization
+through this implementation. Physical power loss and device failures were not
+tested.
 
 Per-record locks coordinate Fundo processes sharing the same archive directory.
 A stale writer reports a conflict instead of replacing a newer generation.

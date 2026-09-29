@@ -241,9 +241,17 @@ function M.publish(transfer, persist)
         end
         fs.writeFileSync(path.join(dir, 'record'), fn.json_encode(record))
         persist()
-        fs.writeFileSync(path.join(M.directory(transfer.fallbackPath), 'current'), fn.json_encode({
+        local published, publishError = pcall(fs.writeFileSync,
+            path.join(M.directory(transfer.fallbackPath), 'current'), fn.json_encode({
             version = 1, current = id, previous = prior and prior.generation or nil,
         }))
+        if not published then
+            -- Rename may have succeeded before directory fsync failed. Retain
+            -- that visible revision as our retry token without reporting success.
+            local readable, token = pcall(M.token, transfer.fallbackPath)
+            if readable and token == id then transfer.expectedGeneration = id end
+            error(publishError, 0)
+        end
         transfer.generation = id
         cleanup(transfer.fallbackPath, id, prior and prior.generation or nil)
         return id

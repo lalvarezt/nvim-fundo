@@ -7,7 +7,7 @@ local path = require('fundo.fs.path')
 local FS = setmetatable({}, {__index = uvw})
 
 local function tempPath(target)
-    return ('%s.__%d'):format(target, uv.hrtime())
+    return ('%s.__%d_%d'):format(target, uv.os_getpid(), uv.hrtime())
 end
 
 for name in pairs(uvw) do
@@ -39,9 +39,20 @@ function FS.copyFileSync(path, newPath)
     end
 end
 
+function FS.syncDirectorySync(dirpath)
+    -- Windows does not expose directory fsync through libuv. File data is still
+    -- synchronized there; durable directory publication requires Unix support.
+    if path.sep == [[\]] then return end
+    local fd, openErr = uv.fs_open(dirpath, 'r', 0)
+    if not fd then error(openErr) end
+    local ok, err = uv.fs_fsync(fd)
+    local closed, closeErr = uv.fs_close(fd)
+    if not ok or not closed then error(err or closeErr) end
+end
+
 function FS.writeFileSync(target, data, mode)
     local p = tempPath(target)
-    local fd, err = uv.fs_open(p, 'w', mode or 384)
+    local fd, err = uv.fs_open(p, 'wx', mode or 384)
     if not fd then
         error(err)
     end
@@ -58,6 +69,8 @@ function FS.writeFileSync(target, data, mode)
             end
             offset = offset + written
         end
+        local synced, syncErr = uv.fs_fsync(fd)
+        if not synced then error(syncErr) end
     end)
     local closeOk, closeErr = uv.fs_close(fd)
     if not ok or not closeOk then
@@ -70,6 +83,7 @@ function FS.writeFileSync(target, data, mode)
         pcall(uv.fs_unlink, p)
         error(renameErr)
     end
+    FS.syncDirectorySync(path.dirname(target))
 end
 
 function FS.mkdirpSync(dirpath, mode)
@@ -96,6 +110,8 @@ function FS.mkdirpSync(dirpath, mode)
             if stat.type ~= 'directory' then
                 error(('path is not a directory: %s'):format(dir))
             end
+            -- A prior interrupted mkdir may have left this entry unsynchronized.
+            FS.syncDirectorySync(path.dirname(dir))
             return
         end
         local ok, err = uv.fs_mkdir(dir, mode)
@@ -106,6 +122,7 @@ function FS.mkdirpSync(dirpath, mode)
             end
             error(err or ('failed to create directory: %s'):format(dir))
         end
+        FS.syncDirectorySync(path.dirname(dir))
     end
 
     local segmentPattern = sep == [[\]] and [[[^\\]+]] or '[^/]+'

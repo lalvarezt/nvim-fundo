@@ -21,6 +21,36 @@ describe('recovery integrity.', function()
         }).lines
     end
 
+    it('captures newer edits when retrying a pointer directory sync failure.', function()
+        local lines = run([[
+            local api, fn = vim.api, vim.fn
+            fn.writefile({'original'}, FILE)
+            vim.cmd('edit ' .. fn.fnameescape(FILE))
+            api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+            vim.cmd('write')
+            local manager, storage, fs = require('fundo.manager'), require('fundo.storage'), require('fundo.fs')
+            assert(manager:syncAllSync())
+            local u = manager:get(api.nvim_get_current_buf())
+            local initial, sync = storage.token(u.fallbackPath), fs.syncDirectorySync
+            vim.cmd('let &l:undolevels = &l:undolevels')
+            api.nvim_buf_set_lines(0, 0, -1, false, {'pending'})
+            fs.syncDirectorySync = function(target)
+                if target == storage.directory(u.fallbackPath) and storage.token(u.fallbackPath) ~= initial then
+                    error('injected pointer directory sync failure')
+                end
+                return sync(target)
+            end
+            assert(not manager:syncAllSync())
+            fs.syncDirectorySync = sync
+            vim.cmd('let &l:undolevels = &l:undolevels')
+            api.nvim_buf_set_lines(0, 0, -1, false, {'newer unsaved work'})
+            assert(manager:syncAllSync())
+            WriteReport({storage.read(u.fallbackPath).contents:gsub('\n$', ''), fn.readfile(FILE)[1]})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'newer unsaved work', 'saved'}, lines)
+    end)
+
     for _, stage in ipairs({'undo', 'restore', 'rollback'}) do
         it('rolls back current text after a recovery exception at ' .. stage .. '.', function()
             local lines = run(([=[

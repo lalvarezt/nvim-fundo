@@ -68,8 +68,10 @@ or a source pathname. Publication runs without yielding between artifacts to
 prevent an unload or another save from interleaving with it. Individual file
 writes use temporary files and rename. Immutable generations are published by
 an atomic pointer after their artifacts are ready. Per-record locks and version
-checks reject stale writers across processes. This covers process interruption;
-power-loss durability is not promised.
+checks reject stale writers across processes. Unix writes synchronize file data
+before rename and directory entries afterward. Tests verify that ordering,
+synchronization failures, and retries after pointer replacement. Physical power
+loss and storage-device failure were not tested.
 
 New snapshots store buffer lines in UTF-8 with LF separators. The manifest
 identifies this format separately from legacy copies of source files. Recovery

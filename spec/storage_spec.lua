@@ -49,6 +49,27 @@ describe('generation storage.', function()
         assert.equal(newer.generation, storage.read(fallback).generation)
     end)
 
+    it('retries publication when pointer rename succeeded before directory sync failed.', function()
+        local first = publish('first')
+        local transfer = snapshot('second', first.generation)
+        local sync = fs.syncDirectorySync
+        ---@diagnostic disable-next-line: duplicate-set-field
+        fs.syncDirectorySync = function(target)
+            if target == storage.directory(fallback) and storage.token(fallback) ~= first.generation then
+                error('injected pointer directory sync failure')
+            end
+            return sync(target)
+        end
+        local ok, err = pcall(storage.publish, transfer, function() end)
+        fs.syncDirectorySync = sync
+        assert.False(ok)
+        assert.truthy(tostring(err):find('pointer directory sync failure', 1, true))
+        assert.equal(storage.token(fallback), transfer.expectedGeneration)
+        assert.truthy(fs.statSync(storage.directory(fallback) .. '/' .. first.generation .. '/record'))
+        storage.publish(transfer, function() end)
+        assert.equal('second\n', storage.read(fallback).contents)
+    end)
+
     it('falls back to the previous complete generation and retains it on repair.', function()
         local first = publish('first')
         local second = publish('second', first.generation)
