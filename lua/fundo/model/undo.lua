@@ -149,6 +149,7 @@ function Undo:reset(dirty, bufName)
     local name = bufName or api.nvim_buf_get_name(self.bufnr)
     if name ~= self.name then
         self.lastError = nil
+        self.lastCapturedTick = nil
         self.undoPath = fn.undofile(name)
         self.fallbackPath = Undo.archivePath(name, self.undoPath, self.dir)
         self.baselinePath = self.fallbackPath .. '.base'
@@ -329,6 +330,9 @@ function Undo:saveBaseline(snapshot)
         return false, err
     end
     self.lastError = nil
+    if self.bufnr and api.nvim_buf_is_loaded(self.bufnr) then
+        self.lastCapturedTick = snapshot and snapshot.changedtick or api.nvim_buf_get_changedtick(self.bufnr)
+    end
     if selected then log.debug('saved baseline archive:', self.baselinePath) end
     return selected
 end
@@ -347,6 +351,7 @@ function Undo:queueBaseline()
         contents = bufferContents(self.bufnr),
         capturedAt = os.time(),
         expectedGeneration = self.generation,
+        changedtick = api.nvim_buf_get_changedtick(self.bufnr),
     }
     self.pendingTransfer = snapshot
     vim.schedule(function()
@@ -463,6 +468,7 @@ function Undo:transferSnapshot()
         baseline_format = 'buffer-lines-v1',
         capturedAt = os.time(),
         expectedGeneration = self.generation,
+        changedtick = api.nvim_buf_get_changedtick(self.bufnr),
     }
 end
 
@@ -754,6 +760,12 @@ function Undo:shouldTransfer()
     if self.isDirty then
         return logTransferDecision(self, true, 'dirty')
     end
+    if vim.in_fast_event and vim.in_fast_event() then
+        return logTransferDecision(self, true, 'check-buffer-changes-on-main-loop')
+    end
+    if api.nvim_buf_get_changedtick(self.bufnr) ~= self.lastCapturedTick then
+        return logTransferDecision(self, true, 'buffer-changed')
+    end
     if not fs.statSync(self.undoPath) then
         if type(vim.in_fast_event) == 'function' and vim.in_fast_event() then
             return logTransferDecision(self, true, 'native-undo-missing-fast-event')
@@ -835,6 +847,7 @@ function Undo:finishTransfer(transfer)
     if self.pendingTransfer ~= transfer then return end
     self.pendingTransfer = nil
     self.generation = transfer.generation or self.generation
+    self.lastCapturedTick = transfer.changedtick or self.lastCapturedTick
     -- Retrying an older snapshot does not resolve a newer capture failure.
     if self.lastError then return end
     self.isDirty = false
