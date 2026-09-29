@@ -293,7 +293,10 @@ function Undo:saveBaseline(snapshot)
     local ok, err = pcall(function()
         local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
         local previous = selected and record and record.baseline_format == 'buffer-lines-v1' and self:readBaseline()
-        if previous and table.concat(previous, '\n') .. '\n' == contents and storage.token(self.fallbackPath) then
+        if previous and table.concat(previous, '\n') .. '\n' == contents
+            and transfer.expectedGeneration
+            and storage.token(self.fallbackPath) == transfer.expectedGeneration
+            and not self.lastError and not (snapshot and snapshot.lastError) then
             if snapshot then snapshot.generation = self.generation end
             return
         end
@@ -325,6 +328,12 @@ function Undo:saveBaseline(snapshot)
         if snapshot then snapshot.generation = self.generation end
     end)
     if not ok then
+        -- Publication can fail after the pointer becomes visible. Keep its
+        -- revision for a retry, but require synchronization before success.
+        if transfer.expectedGeneration ~= (snapshot and snapshot.expectedGeneration or self.generation) then
+            self.generation = transfer.expectedGeneration
+            if snapshot then snapshot.expectedGeneration = transfer.expectedGeneration end
+        end
         self.lastError = transferError(stage, err)
         pcall(log.warn, 'failed to save baseline archive:', self.baselinePath, err)
         return false, err
