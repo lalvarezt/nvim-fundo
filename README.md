@@ -370,3 +370,18 @@ the loaded native history, and recovers the selected tree into a clean source
 buffer. Modified buffers must be saved or inspected first. Journals can be
 opened with `:FundoRecover`; pointer repair selects a generation. Both commands
 accept a source path as their second argument. `repair(id, target)` is the Lua API.
+
+## Edit checkpoints
+
+Tracked buffer edits trigger automatic captures without writing the source file.
+The default `checkpoint = {enabled = true, debounce_ms = 200, max_delay_ms = 1000}`
+saves after a quiet interval and limits postponement during continued typing.
+Buffer callbacks also cover API edits and hidden buffers. Timers stop on disable,
+forget, rename, and unload. `:FundoStatus` shows scheduled checkpoints and the
+last durable capture. Set `checkpoint.enabled = false` to use lifecycle saves
+and explicit `:FundoSync` only.
+
+A crash can lose edits made after the last completed checkpoint. The maximum
+delay is a scheduling bound: a busy Neovim main loop, unavailable storage, or a
+failed synchronization can delay durability. Journals and preservation mode
+protect completed captures; they cannot guarantee that every keystroke is saved.
