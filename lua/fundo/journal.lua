@@ -81,10 +81,34 @@ function M.list(archivesDir, includeLive)
         if kind == 'directory' then
             local directory = path.join(root, id)
             local ok, record = pcall(function()
+                assert(id:match('^%d+%-%d+$'), 'invalid recovery journal directory')
                 local value = fn.json_decode(read(path.join(directory, 'record')))
                 assert(value.version == 1 and type(value.name) == 'string' and type(value.undoPath) == 'string'
                     and type(value.fallbackPath) == 'string' and path.dirname(value.fallbackPath) == archivesDir,
                     'invalid recovery journal identity')
+                assert(value.expectedGeneration == false or (type(value.expectedGeneration) == 'string'
+                    and value.expectedGeneration:match('^%d+%-%d+$')), 'invalid journal generation token')
+                assert(value.capturedAt == nil or (type(value.capturedAt) == 'number'
+                    and value.capturedAt >= 0 and value.capturedAt < math.huge), 'invalid journal capture time')
+                assert(value.baselinePath == nil or value.baselinePath == value.fallbackPath .. '.base',
+                    'invalid journal baseline identity')
+                for _, field in ipairs({'baselineOnly', 'textOnly', 'retainPrevious'}) do
+                    assert(value[field] == nil or type(value[field]) == 'boolean', 'invalid journal capture kind')
+                end
+                if value.createdGenerations ~= nil then
+                    assert(type(value.createdGenerations) == 'table', 'invalid journal generation list')
+                    for _, generation in ipairs(value.createdGenerations) do
+                        assert(type(generation) == 'string' and generation:match('^%d+%-%d+$'),
+                            'invalid journal generation list')
+                    end
+                end
+                if value.lastError ~= nil then
+                    assert(type(value.lastError) == 'table' and type(value.lastError.stage) == 'string'
+                        and type(value.lastError.message) == 'string' and type(value.lastError.time) == 'number'
+                        and value.lastError.time >= 0 and value.lastError.time < math.huge,
+                        'invalid journal error metadata')
+                end
+                assert(not value.textOnly or value.lastError ~= nil, 'text-only journal capture error is missing')
                 assert(type(value.files) == 'table' and value.files.contents, 'journal text is missing')
                 for _, field in ipairs({'contents', 'undoContents'}) do
                     local expected = value.files[field]

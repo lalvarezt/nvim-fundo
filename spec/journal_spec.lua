@@ -35,6 +35,18 @@ describe('recovery journal integrity.', function()
         assert.truthy(fs.statSync(transfer.journalPath .. '/contents'))
     end)
 
+    it('reports malformed metadata without returning an unsafe recovery record.', function()
+        journal.write(transfer)
+        local filename = transfer.journalPath .. '/record'
+        local record = fn.json_decode(table.concat(fn.readfile(filename, 'b'), '\n'))
+        record.lastError = 'damaged error metadata'
+        fs.writeFileSync(filename, fn.json_encode(record))
+        local records, errors = journal.list(dir .. '/archives', true)
+        assert.equal(0, #records)
+        assert.equal(1, #errors)
+        assert.truthy(fs.statSync(transfer.journalPath .. '/contents'))
+    end)
+
     it('keeps the previous capture if a replacement journal fails to synchronize.', function()
         journal.write(transfer)
         local nextTransfer = vim.tbl_extend('force', transfer, {contents = 'new draft\n'})
