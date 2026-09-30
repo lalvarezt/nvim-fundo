@@ -310,6 +310,10 @@ function M.publish(transfer, persist)
         local prior, priorError
         if oldHead then prior, priorError = M.read(transfer.fallbackPath) end
         if priorError and priorError ~= 'missing' then error(priorError) end
+        if transfer.retainPrevious and prior and not prior.baselineOnly then
+            fs.writeFileSync(path.join(M.directory(transfer.fallbackPath), prior.generation, 'retained'),
+                'history before adopting an unverified native branch\n')
+        end
         if transfer.baselineOnly then
             if prior and not prior.baselineOnly then
                 saved = vim.tbl_extend('force', prior, {
