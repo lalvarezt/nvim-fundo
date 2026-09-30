@@ -467,7 +467,8 @@ end
 
 function Undo:recordCaptureFailure(err)
     self.lastError = transferError('capture', err)
-    local text = self:textSnapshot()
+    local text = self.captureAttempt or self:textSnapshot()
+    self.captureAttempt = nil
     if self.captureFailure and self.captureFailure.contents == text.contents and self.captureFailure.journalPath then
         self.captureFailure.lastError = self.lastError
         pcall(journal.refresh, self.captureFailure)
@@ -494,6 +495,7 @@ end
 
 function Undo:transferSnapshot()
     local snapshot = self:textSnapshot()
+    self.captureAttempt = snapshot
     local temporary = fn.tempname()
     local ok, err = self:saveUndo(temporary)
     if not ok then
@@ -525,6 +527,7 @@ function Undo:transferSnapshot()
         error(closeErr)
     end
     snapshot.undoContents = contents
+    self.captureAttempt = nil
     return snapshot
 end
 
@@ -891,6 +894,7 @@ function Undo:transferSync()
         return
     end
     log.debug('transferSync started:', self.bufnr, self.name or '')
+    self.captureAttempt = nil
     local captured, transfer = pcall(self.transferSnapshot, self)
     if not captured then
         self:recordCaptureFailure(transfer)

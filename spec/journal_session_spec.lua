@@ -77,4 +77,23 @@ describe('durable pending recovery.', function()
         ]])
         assert.same({'uncaptured work', 'true', 'false'}, second)
     end)
+
+    it('preserves the text read before a failed undo capture changes the buffer.', function()
+        local result = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            assert(require('fundo.manager'):syncAllSync())
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'original draft'})
+            local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+            local save = u.saveUndo
+            u.saveUndo = function()
+                vim.api.nvim_buf_set_lines(0, 0, -1, false, {'changed during capture'})
+                return false, 'capture interrupted'
+            end
+            local ok = pcall(u.transferSync, u)
+            u.saveUndo = save
+            WriteReport({tostring(ok), (u.captureFailure.contents:gsub('\n$', ''))})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'false', 'original draft'}, result)
+    end)
 end)
