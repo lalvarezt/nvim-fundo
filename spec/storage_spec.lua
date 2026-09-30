@@ -49,6 +49,26 @@ describe('generation storage.', function()
         assert.equal(newer.generation, storage.read(fallback).generation)
     end)
 
+    it('retries a read when publications retire the selected generations.', function()
+        local first = publish('first')
+        local second = publish('second', first.generation)
+        local open = fs.openSync
+        local advanced = false
+        fs.openSync = function(target, ...)
+            if target == storage.directory(fallback) .. '/' .. second.generation .. '/record' and not advanced then
+                advanced = true
+                local third = publish('third', second.generation)
+                publish('fourth', third.generation)
+            end
+            return open(target, ...)
+        end
+        local ok, result, err = pcall(storage.read, fallback)
+        fs.openSync = open
+        assert.True(ok)
+        assert.is_nil(err)
+        assert.equal('fourth\n', result and result.contents)
+    end)
+
     it('retries publication when pointer rename succeeded before directory sync failed.', function()
         local first = publish('first')
         local transfer = snapshot('second', first.generation)
