@@ -66,7 +66,12 @@ describe('durable pending recovery.', function()
         assert.same({'true', 'false', 'uncaptured work', 'failure retained'}, first)
         local second = run([[
             local records = require('fundo.journal').list(require('fundo.config').archives_dir, true)
-            WriteReport({records[1].contents:gsub('\n$', ''), tostring(records[1].textOnly),
+            local candidates = require('fundo').recovery_candidates(FILE)
+            local id
+            for _, candidate in ipairs(candidates) do if candidate.text_only then id = candidate.id end end
+            local opened = require('fundo').recover(id, FILE)
+            local text = table.concat(vim.api.nvim_buf_get_lines(opened.bufnr, 0, -1, false), '|')
+            WriteReport({text, tostring(records[1].textOnly),
                 tostring(require('fundo').doctor().ok)})
             vim.cmd('quitall!')
         ]])

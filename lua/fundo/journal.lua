@@ -28,6 +28,7 @@ function M.refresh(transfer)
         baselineOnly = transfer.baselineOnly, textOnly = transfer.textOnly,
         capturedAt = transfer.capturedAt, expectedGeneration = transfer.expectedGeneration,
         changedtick = transfer.changedtick, lastError = transfer.lastError,
+        createdGenerations = transfer.createdGenerations,
         pid = uv.os_getpid(), host = uv.os_gethostname(), files = {},
     }
     for _, field in ipairs({'contents', 'undoContents'}) do

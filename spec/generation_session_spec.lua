@@ -127,4 +127,30 @@ describe('generation recovery across processes.', function()
         ]])
         assert.same({'other session work', 'true'}, result)
     end)
+
+    it('opens preserved undo without changing the source and repairs a missing pointer explicitly.', function()
+        local result = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+            vim.cmd('write')
+            local manager, fundo = require('fundo.manager'), require('fundo')
+            assert(manager:syncAllSync())
+            local u = manager:get(vim.api.nvim_get_current_buf())
+            local committed = require('fundo.storage').read(u.fallbackPath)
+            assert(require('fundo.fs').unlinkSync(require('fundo.storage').directory(u.fallbackPath) .. '/current'))
+            local candidates = fundo.recovery_candidates()
+            local found = false
+            for _, candidate in ipairs(candidates) do if candidate.id == committed.generation then found = true end end
+            local inspected = fundo.recover(committed.generation)
+            vim.api.nvim_buf_call(inspected.bufnr, function() vim.cmd('undo') end)
+            local old = table.concat(vim.api.nvim_buf_get_lines(inspected.bufnr, 0, -1, false), '|')
+            local source = BufferText()
+            local repaired = fundo.repair(committed.generation)
+            WriteReport({tostring(found), tostring(inspected.undo_loaded), old, source,
+                tostring(repaired == require('fundo.storage').token(u.fallbackPath)),
+                table.concat(vim.fn.readfile(FILE), '|')})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'true', 'true', 'original', 'saved', 'true', 'saved'}, result)
+    end)
 end)

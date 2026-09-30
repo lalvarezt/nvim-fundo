@@ -292,6 +292,18 @@ function Manager:scanArchivesDir()
                                 end
                             end
                             storage.remove(fallbackPath)
+                            for _, u in pairs(self.undos) do
+                                if u.fallbackPath == fallbackPath and u.generation == record.generation.token then
+                                    u.generation = false
+                                    if u.pendingTransfer and u.pendingTransfer.expectedGeneration == record.generation.token then
+                                        u.pendingTransfer.expectedGeneration = false
+                                    end
+                                end
+                            end
+                            local pending = self.pendingTransfers[fallbackPath]
+                            if pending and pending.expectedGeneration == record.generation.token then
+                                pending.expectedGeneration = false
+                            end
                         end)
                     end)
                 else

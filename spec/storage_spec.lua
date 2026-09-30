@@ -120,6 +120,34 @@ describe('generation storage.', function()
         assert.truthy(storage.records(dir)[1].error)
     end)
 
+    it('refuses publication over missing pointers and repairs an explicitly selected capture.', function()
+        local first = publish('preserved work')
+        assert(fs.unlinkSync(storage.directory(fallback) .. '/current'))
+        for _, token in ipairs({first.generation, false}) do
+            local called = false
+            local ok = pcall(storage.publish, snapshot('replacement', token), function() called = true end)
+            assert.False(ok)
+            assert.False(called)
+        end
+        local candidates = storage.candidates(fallback)
+        assert.equal(1, #candidates)
+        assert.equal(first.generation, candidates[1].generation)
+        storage.restorePointer(fallback, first.generation, false)
+        assert.equal('preserved work\n', storage.read(fallback).contents)
+        local next = publish('next', first.generation)
+        publish('later', next.generation)
+        assert.truthy(fs.statSync(storage.directory(fallback) .. '/' .. first.generation .. '/contents'))
+    end)
+
+    it('rejects pointer repair after another publication changes the revision.', function()
+        local first = publish('first')
+        local revision = storage.revision(fallback)
+        local second = publish('second', first.generation)
+        local ok = pcall(storage.restorePointer, fallback, first.generation, revision)
+        assert.False(ok)
+        assert.equal(second.generation, storage.token(fallback))
+    end)
+
     it('serializes acquisition while a dead owner is being reclaimed.', function()
         local lock = storage.directory(fallback) .. '.lock'
         fs.mkdirpSync(lock, 448)

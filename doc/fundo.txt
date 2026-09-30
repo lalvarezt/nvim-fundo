@@ -421,3 +421,23 @@ API                                                                 *fundo-api*
         Enable Fundo with `:FundoEnable` before syncing.
 
 vim:tw=78:ts=8:ft=help:norl:
+RECOVERY COPIES                                           *fundo-recovery-copies*
+
+Full captures are durably journaled under stdpath('state')/fundo-journal before
+archive publication. Failed captures keep a text-only copy and diagnostics after
+unload. An error saving the journal preserves text in a listed recovery buffer;
+save that buffer before exiting. Successful publication removes its journal.
+
+:FundoRecover [ID] [SOURCE]                                *:FundoRecover*
+    List validated generations and journals, or open the selected capture in a
+    listed scratch buffer. Restore its undo tree when available. Source buffers
+    and archive pointers stay unchanged. SOURCE defaults to the current source.
+
+:FundoRepair GENERATION_ID [SOURCE]                       *:FundoRepair*
+    Restore a missing or damaged pointer to an explicitly selected generation.
+    Reject concurrent pointer changes. Preserve loaded native history before
+    recovering into a clean source buffer. Journals require FundoRecover.
+
+require('fundo').recovery_candidates(target) lists captures; recover(id, target)
+returns {bufnr, id, undo_loaded, error}. repair(id, target) returns a generation.
+The target may be a source path or buffer number.

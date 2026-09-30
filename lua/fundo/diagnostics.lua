@@ -221,6 +221,7 @@ function M.doctor()
     end
 
     local legacy = 0
+    local recoveryCaptures = {}
     for _, generation in ipairs(storage.records(config.archives_dir)) do
         totalSize = totalSize + generation.size
         local key = generation.fallbackPath and path.basename(generation.fallbackPath)
@@ -232,6 +233,13 @@ function M.doctor()
             err = readError
         end
         if err then issue('invalid-generation', (generation.name or generation.directory) .. ': ' .. err) end
+        if generation.fallbackPath then
+            for _, capture in ipairs(storage.candidates(generation.fallbackPath)) do
+                if capture.generation ~= generation.token and capture.generation ~= generation.previous then
+                    recoveryCaptures[#recoveryCaptures + 1] = {name = capture.name, id = capture.generation, kind = 'generation'}
+                end
+            end
+        end
     end
     local expired = 0
     local cutoff = config.retention_days and os.time() - config.retention_days * 24 * 60 * 60 or nil
@@ -270,6 +278,9 @@ function M.doctor()
     local journalRecords, journalErrors = journal.list(config.archives_dir, true)
     for _, record in ipairs(journalRecords) do
         issue('recovery-journal', record.name .. ': ' .. record.journalPath)
+        recoveryCaptures[#recoveryCaptures + 1] = {
+            name = record.name, id = 'journal:' .. path.basename(record.journalPath), kind = 'journal',
+        }
     end
     for _, err in ipairs(journalErrors) do issue('invalid-journal', err.path .. ': ' .. err.message) end
     local failures = {}
@@ -318,6 +329,7 @@ function M.doctor()
         tracked_buffers = manager.undos and vim.tbl_count(manager.undos) or 0,
         pending_transfers = pendingCount,
         issues = issues,
+        recovery_captures = recoveryCaptures,
     }
 end
 
@@ -385,6 +397,9 @@ function M.formatDoctor(value)
         ),
         ('  tracked buffers: %d; pending transfers: %d'):format(value.tracked_buffers, value.pending_transfers),
     }
+    for _, capture in ipairs(value.recovery_captures or {}) do
+        table.insert(lines, ('  recovery capture %s: %s'):format(capture.id, capture.name))
+    end
     if #value.issues == 0 then
         table.insert(lines, '  issues: none')
     else
