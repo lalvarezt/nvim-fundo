@@ -199,12 +199,41 @@ function M.size(fallbackPath)
     return directorySize(M.directory(fallbackPath))
 end
 
+local function writeGeneration(transfer)
+    local id = ('%d-%.0f'):format(uv.os_getpid(), uv.hrtime())
+    local dir = path.join(M.directory(transfer.fallbackPath), id)
+    fs.mkdirpSync(dir, directoryMode)
+    local record = {
+        version = 1, name = transfer.name, undoPath = transfer.undoPath,
+        fallbackPath = transfer.fallbackPath, baselineOnly = transfer.baselineOnly == true,
+        capturedAt = transfer.capturedAt, files = {},
+    }
+    for _, field in ipairs({'contents', 'undoContents', 'baselineContents'}) do
+        if transfer[field] then
+            local data = transfer[field]
+            fs.writeFileSync(path.join(dir, field), data)
+            record.files[field] = {size = #data, hash = fn.sha256(data)}
+        end
+    end
+    fs.writeFileSync(path.join(dir, 'record'), fn.json_encode(record))
+    return id
+end
+
+function M.retain(transfer)
+    return M.withLock(transfer.fallbackPath, function()
+        local id = writeGeneration(transfer)
+        fs.writeFileSync(path.join(M.directory(transfer.fallbackPath), id, 'retained'), 'competing undo history\n')
+        return id
+    end)
+end
+
 local function cleanup(fallbackPath, current, previous, oldHead)
     local dir = M.directory(fallbackPath)
     for _, item in ipairs(entries(dir)) do
         if item.name ~= 'current' and item.name ~= current and item.name ~= previous then
             local disposable = require('fundo.config').prune_policy == 'delete'
-            if not disposable and oldHead and (item.name == oldHead.current or item.name == oldHead.previous) then
+            if not disposable and oldHead and (item.name == oldHead.current or item.name == oldHead.previous)
+                and not fs.statSync(path.join(dir, item.name, 'retained')) then
                 -- Only retire a known, complete committed generation. Keep
                 -- damaged or unpublished captures available for inspection.
                 disposable = pcall(readGeneration, fallbackPath, item.name)
@@ -238,22 +267,7 @@ function M.publish(transfer, persist)
             transfer.generation = false
             return false
         end
-        local id = ('%d-%.0f'):format(uv.os_getpid(), uv.hrtime())
-        local dir = path.join(M.directory(transfer.fallbackPath), id)
-        fs.mkdirpSync(dir, directoryMode)
-        local record = {
-            version = 1, name = saved.name, undoPath = saved.undoPath,
-            fallbackPath = saved.fallbackPath, baselineOnly = saved.baselineOnly == true,
-            capturedAt = saved.capturedAt, files = {},
-        }
-        for _, field in ipairs({'contents', 'undoContents', 'baselineContents'}) do
-            if saved[field] then
-                local data = saved[field]
-                fs.writeFileSync(path.join(dir, field), data)
-                record.files[field] = {size = #data, hash = fn.sha256(data)}
-            end
-        end
-        fs.writeFileSync(path.join(dir, 'record'), fn.json_encode(record))
+        local id = writeGeneration(saved)
         persist()
         local published, publishError = pcall(fs.writeFileSync,
             path.join(M.directory(transfer.fallbackPath), 'current'), fn.json_encode({
