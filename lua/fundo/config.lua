@@ -9,6 +9,7 @@ local path = require('fundo.fs.path')
 ---@field filter? fun(path: string, bufnr: number): boolean
 ---@field track_on? 'open'|'write'|'manual'
 ---@field logging? FundoLoggingConfig
+---@field checkpoint? {enabled?: boolean, debounce_ms?: number, max_delay_ms?: number}
 ---@class FundoLoggingConfig
 ---@field enabled boolean
 ---@field level string
@@ -18,6 +19,7 @@ local def = {
     limit_archives_size = 512,
     prune_policy = 'preserve',
     track_on = 'open',
+    checkpoint = {enabled = true, debounce_ms = 200, max_delay_ms = 1000},
     filter = function()
         return true
     end,
@@ -72,6 +74,18 @@ local function reload()
     vim.validate('archives_dir', resolved.archives_dir, 'string')
     vim.validate('baseline_max_file_size', resolved.baseline_max_file_size, 'number')
     vim.validate('filter', resolved.filter, 'function')
+    vim.validate('checkpoint', resolved.checkpoint, 'table')
+    vim.validate('checkpoint.enabled', resolved.checkpoint.enabled, 'boolean')
+    for _, key in ipairs({'debounce_ms', 'max_delay_ms'}) do
+        local value = resolved.checkpoint[key]
+        vim.validate('checkpoint.' .. key, value, 'number')
+        if value ~= value or value <= 0 or value >= math.huge or value % 1 ~= 0 then
+            error('checkpoint.' .. key .. ' must be a positive finite integer', 3)
+        end
+    end
+    if resolved.checkpoint.max_delay_ms < resolved.checkpoint.debounce_ms then
+        error('checkpoint.max_delay_ms must be at least checkpoint.debounce_ms', 3)
+    end
     if resolved.prune_policy ~= 'preserve' and resolved.prune_policy ~= 'delete' then
         error('prune_policy must be preserve or delete', 3)
     end
@@ -99,6 +113,7 @@ local function reload()
     Config.prune_policy = resolved.prune_policy
     Config.filter = resolved.filter
     Config.track_on = resolved.track_on
+    Config.checkpoint = vim.deepcopy(resolved.checkpoint)
     Config.logging = {
         enabled = resolved.logging.enabled,
         level = resolved.logging.level,
@@ -117,6 +132,7 @@ Config = {
     prune_policy = def.prune_policy,
     filter = def.filter,
     track_on = def.track_on,
+    checkpoint = vim.deepcopy(def.checkpoint),
     logging = vim.deepcopy(def.logging),
     reload = reload
 }

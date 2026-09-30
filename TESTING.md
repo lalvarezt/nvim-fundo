@@ -93,3 +93,8 @@ with the new path. After a closed-session move, `:FundoAssociate old-path`
 copies archived history to the open destination. Identity-based suggestions
 require a unique match and never apply automatically. Association tests use
 headless child sessions. Windows and sudden power loss were not validated.
+Edit checkpoint coverage in `spec/checkpoint_spec.lua` exercises ordinary API
+edits, sustained changes, hidden buffers, failed publications, timer disposal,
+and process exit without lifecycle events. Existing child-session tests disable
+checkpoints by default so manual and lifecycle failure injection stays isolated;
+checkpoint tests opt in explicitly, including a test using the default timings.

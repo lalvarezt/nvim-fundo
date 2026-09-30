@@ -59,6 +59,7 @@ end
 ---@field dir string
 ---@field bufnr number
 ---@field attached boolean
+---@field checkpointStarted? number
 local Undo = {}
 
 local function logTransferDecision(self, result, reason)
@@ -135,6 +136,7 @@ function Undo:attach()
 end
 
 function Undo:dispose()
+    require('fundo.checkpoint').cancel(self)
     log.debug('undo disposed:', self.bufnr, self.name or '')
     self.attached = false
 end
@@ -884,6 +886,7 @@ function Undo:transferSync()
         if err then error(err, 0) end
         self.pendingTransfer = nil
         self.isDirty = false
+        require('fundo.checkpoint').cancel(self)
         return
     end
     log.debug('transferSync started:', self.bufnr, self.name or '')
@@ -914,6 +917,8 @@ function Undo:finishTransfer(transfer)
     self.isDirty = false
     self.lastAction = 'transferred'
     self.lastUpdated = os.time()
+    self.lastDurableAt = transfer.durableAt or os.time()
+    require('fundo.checkpoint').cancel(self)
     if self.captureFailure and self.captureFailure.contents == transfer.contents then
         journal.finish(self.captureFailure)
         self.resolvedCapture = self.captureFailure

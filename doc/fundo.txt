@@ -441,3 +441,15 @@ save that buffer before exiting. Successful publication removes its journal.
 require('fundo').recovery_candidates(target) lists captures; recover(id, target)
 returns {bufnr, id, undo_loaded, error}. repair(id, target) returns a generation.
 The target may be a source path or buffer number.
+
+EDIT CHECKPOINTS                                           *fundo-checkpoints*
+
+checkpoint = {enabled = true, debounce_ms = 200, max_delay_ms = 1000}
+    Capture tracked edits after the quiet interval. Limit postponement during
+    continuous edits to max_delay_ms, subject to main-loop and storage delays.
+    Includes API edits and hidden buffers. Stop timers on disable, forget,
+    rename, and unload. Set enabled=false to keep only lifecycle/manual saves.
+    FundoStatus shows scheduled checkpoints and the last durable capture.
+
+Checkpoints do not write source files. A crash can lose edits since the last
+completed capture; successful checkpoints do not promise per-keystroke durability.

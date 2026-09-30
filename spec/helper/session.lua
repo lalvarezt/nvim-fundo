@@ -38,6 +38,7 @@ function M.run(opts)
         'require("fundo").setup({',
         '    archives_dir = ' .. quote(opts.archives_dir) .. ',',
         '    limit_archives_size = ' .. tostring(opts.limit_archives_size or 16) .. ',',
+        '    checkpoint = vim.fn.json_decode(' .. quote(fn.json_encode(opts.checkpoint or {enabled = false})) .. '),',
         '})',
         'FILE = ' .. quote(opts.file),
         'REPORT = ' .. quote(report),

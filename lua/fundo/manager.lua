@@ -145,6 +145,14 @@ function Manager:attach(bufnr, trigger)
                 end
             end
             self.undos[bufnr] = u
+            require('fundo.checkpoint').watch(u, function(ok)
+                if ok then
+                    self:finishCaptureFailure(u)
+                    self.pendingTransfers[u.fallbackPath] = nil
+                elseif u.captureFailure then
+                    self.captureFailures[u.fallbackPath] = u.captureFailure
+                end
+            end)
             log.debug('attached buffer:', bufnr, bufferName(bufnr))
         else
             log.trace('attach skipped:', bufnr, bufferName(bufnr))

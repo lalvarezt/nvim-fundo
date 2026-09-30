@@ -139,6 +139,9 @@ function M.status(target)
         last_error = failure and vim.deepcopy(failure) or nil,
         last_action = tracked and tracked.lastAction or nil,
         last_updated = tracked and tracked.lastUpdated or nil,
+        last_durable = tracked and (tracked.lastDurableAt
+            or (tracked.pendingTransfer and tracked.pendingTransfer.durableAt)) or nil,
+        checkpoint_pending = tracked and tracked.checkpointStarted ~= nil or false,
         state = state,
         generation = generation and generation.generation or nil,
         generation_error = generationError ~= 'missing' and generationError or nil,
@@ -381,6 +384,10 @@ function M.formatStatus(value)
     if value.last_action then
         table.insert(lines, '  last action: ' .. value.last_action)
     end
+    if value.last_durable then
+        table.insert(lines, '  last durable capture: ' .. os.date('%Y-%m-%d %H:%M:%S %z', value.last_durable))
+    end
+    if value.checkpoint_pending then table.insert(lines, '  edit checkpoint: scheduled') end
     return table.concat(lines, '\n')
 end
 
