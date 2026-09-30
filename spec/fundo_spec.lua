@@ -632,7 +632,7 @@ describe('fundo integration.', function()
             rawset(fs, 'writeFileSync', originalWrite)
 
             assert.False(first.tracked)
-            assert.equal('fallback', first.last_error.stage)
+            assert.equal('journal', first.last_error.stage)
             assert.truthy(first.last_error.message:find('first failure', 1, true))
             assert.False(ok)
             local latest = require('fundo').status(file).last_error

@@ -16,6 +16,7 @@ local path = require('fundo.fs.path')
 local mutex = require('fundo.lib.mutex')
 local manifest = require('fundo.manifest')
 local storage = require('fundo.storage')
+local journal = require('fundo.journal')
 
 local archiveDirMode = 448 -- 0o700
 
@@ -60,6 +61,8 @@ function Manager:detach(bufnr)
         end)
         if not ok then
             pcall(log.warn, 'failed to transfer undo archive for buffer', bufnr, err)
+            vim.notify('Fundo could not save ' .. u.name .. ': ' .. tostring(err)
+                .. '; inspect :FundoDoctor for recovery copies', vim.log.levels.WARN)
             if u.pendingTransfer then
                 self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
             end
@@ -102,6 +105,7 @@ function Manager:forgetName(name)
     name = path.normalize(name)
     self.forgotten = self.forgotten or {}
     self.forgotten[name] = true
+    journal.forget(self.archivesDir, name)
     if self.manualPaths then self.manualPaths[name] = nil end
     for bufnr, u in pairs(self.undos or {}) do
         if path.normalize(u.name) == name then
@@ -124,7 +128,7 @@ function Manager:attach(bufnr, trigger)
                 -- The buffer may have changed while Fundo was disabled. Capture
                 -- its current history before retrying the older detached copy.
                 u:reset(true)
-                if not vim.bo[bufnr].modified and u:isEmpty() then
+                if not vim.bo[bufnr].modified and (u:isEmpty() or self.pendingTransfers[u.fallbackPath].fromJournal) then
                     u.pendingRecovery = self.pendingTransfers[u.fallbackPath]
                 end
             end
@@ -419,6 +423,8 @@ function Manager:syncAllSync()
     end
     if #failures > 0 then
         pcall(log.warn, 'synchronous undo transfer failures:', table.concat(failures, '; '))
+        vim.notify('Fundo save failed: ' .. table.concat(failures, '; ')
+            .. '; inspect :FundoDoctor for recovery copies', vim.log.levels.WARN)
         return false, table.concat(failures, '; ')
     end
     return true
@@ -444,6 +450,14 @@ function Manager:initialize()
     self.forgottenProjects = self.forgottenProjects or {}
     self.manualPaths = self.manualPaths or {}
     self.pendingTransfers = self.pendingTransfers or {}
+    local records, errors = journal.list(self.archivesDir)
+    self.journalErrors = errors
+    for _, record in ipairs(records) do
+        local ok, token = pcall(storage.token, record.fallbackPath)
+        if ok and token == record.expectedGeneration and not self.pendingTransfers[record.fallbackPath] then
+            self.pendingTransfers[record.fallbackPath] = record
+        end
+    end
     self.lastScannedtime = uv.hrtime()
     self.mutex = mutex:new()
     self.disposables = {}
