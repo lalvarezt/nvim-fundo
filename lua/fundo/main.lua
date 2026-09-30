@@ -64,6 +64,23 @@ local function createCommand()
     api.nvim_create_user_command('FundoPreview', function()
         require('fundo').preview()
     end, {force = true})
+    api.nvim_create_user_command('FundoRecover', function(opts)
+        local target = opts.fargs[2]
+        if opts.fargs[1] then
+            local result = require('fundo').recover(opts.fargs[1], target)
+            api.nvim_set_current_buf(result.bufnr)
+            if result.error then vim.notify('Recovery text opened; undo load failed: ' .. result.error, vim.log.levels.WARN) end
+        else
+            local lines = {'Fundo recovery captures (use :FundoRecover ID to inspect):'}
+            for _, capture in ipairs(require('fundo').recovery_candidates(target)) do
+                table.insert(lines, ('  %s: %s%s'):format(capture.id, capture.path, capture.text_only and ' (text only)' or ''))
+            end
+            print(table.concat(lines, '\n'))
+        end
+    end, {nargs = '*', force = true})
+    api.nvim_create_user_command('FundoRepair', function(opts)
+        print('Restored Fundo generation ' .. require('fundo').repair(opts.fargs[1], opts.fargs[2]))
+    end, {nargs = '+', force = true})
     api.nvim_create_user_command('FundoAssociate', function(opts)
         if opts.fargs[1] then
             require('fundo').associate(opts.fargs[1])

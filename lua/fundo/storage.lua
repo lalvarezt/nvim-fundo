@@ -37,6 +37,20 @@ local function idValid(id)
     return type(id) == 'string' and id:match('^%d+%-%d+$') ~= nil
 end
 
+local function hasCaptures(fallbackPath, owned)
+    local known = {}
+    for _, id in ipairs(owned or {}) do known[id] = true end
+    local scan = uv.fs_scandir(M.directory(fallbackPath))
+    if scan then
+        while true do
+            local name, kind = uv.fs_scandir_next(scan)
+            if not name then break end
+            if kind == 'directory' and idValid(name) and not known[name] then return true end
+        end
+    end
+    return false
+end
+
 local function head(fallbackPath)
     local filename = path.join(M.directory(fallbackPath), 'current')
     if not fs.statSync(filename) then return end
@@ -94,7 +108,9 @@ function M.read(fallbackPath)
     for _ = 1, 3 do
         local ok, value = pcall(head, fallbackPath)
         if not ok then return nil, tostring(value) end
-        if not value then return nil, 'missing' end
+        if not value then
+            return nil, hasCaptures(fallbackPath) and 'generation pointer is missing; inspect :FundoRecover and select :FundoRepair' or 'missing'
+        end
         local loaded, result = pcall(readGeneration, fallbackPath, value.current)
         if not loaded and value.previous then
             loaded, result = pcall(readGeneration, fallbackPath, value.previous)
@@ -199,8 +215,11 @@ function M.size(fallbackPath)
     return directorySize(M.directory(fallbackPath))
 end
 
-local function writeGeneration(transfer)
+local function writeGeneration(transfer, owner)
+    owner = owner or transfer
     local id = ('%d-%.0f'):format(uv.os_getpid(), uv.hrtime())
+    owner.createdGenerations = owner.createdGenerations or {}
+    table.insert(owner.createdGenerations, id)
     local dir = path.join(M.directory(transfer.fallbackPath), id)
     fs.mkdirpSync(dir, directoryMode)
     local record = {
@@ -227,6 +246,41 @@ function M.retain(transfer)
     end)
 end
 
+function M.candidates(fallbackPath)
+    local result, errors = {}, {}
+    for _, item in ipairs(entries(M.directory(fallbackPath))) do
+        if item.kind == 'directory' and idValid(item.name) then
+            local ok, value = pcall(readGeneration, fallbackPath, item.name)
+            if ok then
+                value.retained = fs.statSync(path.join(M.directory(fallbackPath), item.name, 'retained')) ~= nil
+                result[#result + 1] = value
+            else
+                errors[#errors + 1] = {generation = item.name, message = tostring(value)}
+            end
+        end
+    end
+    table.sort(result, function(a, b) return a.generation < b.generation end)
+    return result, errors
+end
+
+function M.restorePointer(fallbackPath, id, expectedRevision)
+    assert(idValid(id), 'invalid recovery generation')
+    return M.withLock(fallbackPath, function()
+        assert(M.revision(fallbackPath) == expectedRevision, 'archive changed while selecting recovery; inspect it again')
+        local chosen = readGeneration(fallbackPath, id)
+        local ok, oldHead = pcall(head, fallbackPath)
+        local dir = M.directory(fallbackPath)
+        if ok and oldHead and fs.statSync(path.join(dir, oldHead.current)) then
+            fs.writeFileSync(path.join(dir, oldHead.current, 'retained'), 'history before explicit pointer repair\n')
+        end
+        fs.writeFileSync(path.join(dir, id, 'retained'), 'explicitly selected recovery history\n')
+        fs.writeFileSync(path.join(dir, 'current'), fn.json_encode({
+            version = 1, current = id, previous = ok and oldHead and oldHead.current ~= id and oldHead.current or nil,
+        }))
+        return chosen
+    end)
+end
+
 local function cleanup(fallbackPath, current, previous, oldHead)
     local dir = M.directory(fallbackPath)
     for _, item in ipairs(entries(dir)) do
@@ -247,11 +301,14 @@ function M.publish(transfer, persist)
     return M.withLock(transfer.fallbackPath, function()
         local oldHead = head(transfer.fallbackPath)
         local current = oldHead and oldHead.current or false
-        if current and current ~= transfer.expectedGeneration then
+        if current ~= transfer.expectedGeneration then
             error('archive changed in another session; reopen the file before retrying')
         end
+        assert(oldHead or not hasCaptures(transfer.fallbackPath, transfer.createdGenerations),
+            'generation pointer is missing; inspect :FundoRecover and select :FundoRepair before publishing')
         local saved = transfer
-        local prior, priorError = M.read(transfer.fallbackPath)
+        local prior, priorError
+        if oldHead then prior, priorError = M.read(transfer.fallbackPath) end
         if priorError and priorError ~= 'missing' then error(priorError) end
         if transfer.baselineOnly then
             if prior and not prior.baselineOnly then
@@ -267,7 +324,7 @@ function M.publish(transfer, persist)
             transfer.generation = false
             return false
         end
-        local id = writeGeneration(saved)
+        local id = writeGeneration(saved, transfer)
         persist()
         local published, publishError = pcall(fs.writeFileSync,
             path.join(M.directory(transfer.fallbackPath), 'current'), fn.json_encode({
@@ -281,6 +338,7 @@ function M.publish(transfer, persist)
             error(publishError, 0)
         end
         transfer.generation = id
+        transfer.createdGenerations = nil
         cleanup(transfer.fallbackPath, id, prior and prior.generation or nil, oldHead)
         return id
     end)
@@ -308,6 +366,7 @@ function M.records(archivesDir)
                     directory = dir,
                     fallbackPath = record.fallbackPath, name = record.name,
                     token = pointer.current, size = M.size(record.fallbackPath),
+                    previous = pointer.previous,
                     mtime = fs.statSync(path.join(dir, 'current')).mtime.sec,
                 }
             end)
@@ -315,8 +374,19 @@ function M.records(archivesDir)
                 result[#result + 1] = value
             else
                 local stat = fs.statSync(dir)
-                result[#result + 1] = {directory = dir, size = directorySize(dir),
+                local diagnostic = {directory = dir, size = directorySize(dir),
                     mtime = stat and stat.mtime.sec or 0, error = tostring(value)}
+                for _, entry in ipairs(entries(dir)) do
+                    if entry.kind == 'directory' and idValid(entry.name) then
+                        local readable, record = pcall(readJson, path.join(dir, entry.name, 'record'))
+                        if readable and type(record.fallbackPath) == 'string' and M.directory(record.fallbackPath) == dir
+                            and path.dirname(record.fallbackPath) == archivesDir then
+                            diagnostic.fallbackPath, diagnostic.name = record.fallbackPath, record.name
+                            break
+                        end
+                    end
+                end
+                result[#result + 1] = diagnostic
             end
         end
     end

@@ -51,6 +51,21 @@ function M.recovery(bufnr)
     return tracked and tracked.recovery and vim.deepcopy(tracked.recovery) or nil
 end
 
+---List validated generations and journals for a source path or buffer.
+function M.recovery_candidates(target)
+    return require('fundo.recovery').candidates(target)
+end
+
+---Open a recovery capture in a listed scratch buffer, keeping its undo when available.
+function M.recover(id, target)
+    return require('fundo.recovery').open(id, target)
+end
+
+---Restore the archive pointer to an explicitly selected generation.
+function M.repair(id, target)
+    return require('fundo.recovery').repair(id, target)
+end
+
 ---Compare the recovered previous contents with a snapshot of the current buffer.
 ---@param bufnr? number
 function M.preview(bufnr)

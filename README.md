@@ -339,7 +339,7 @@ See [TESTING.md](./TESTING.md) for the recovery cases and validation boundaries.
 ## License
 
 The project is licensed under a BSD-3-clause license. See [LICENSE](./LICENSE) file for details.
-# Competing undo histories
+## Competing undo histories and recovery copies
 
 When native undo differs from a committed Fundo capture, Fundo preserves the native
 tree as a separate generation before loading the committed tree. The default
@@ -356,3 +356,17 @@ If undo capture fails, Fundo journals a separate text-only copy and keeps the
 capture error visible after buffer unload. It leaves committed undo intact. If
 the journal also fails, Fundo retains the text in a listed recovery buffer and
 reports the failure. Such a buffer still needs saving before editor exit.
+
+`:FundoRecover` lists validated captures for the current source. Use
+`:FundoRecover ID` to open one in a listed scratch buffer, with its undo tree when
+available. The source and archive pointer stay unchanged. The Lua equivalents
+are `recovery_candidates(target)` and `recover(id, target)`; `target` can be a
+source path or buffer number.
+
+A missing pointer with existing captures blocks publication. Inspect the
+captures, then use `:FundoRepair GENERATION_ID` to restore the selected pointer.
+Repair checks the pointer revision again under the publication lock, preserves
+the loaded native history, and recovers the selected tree into a clean source
+buffer. Modified buffers must be saved or inspected first. Journals can be
+opened with `:FundoRecover`; pointer repair selects a generation. Both commands
+accept a source path as their second argument. `repair(id, target)` is the Lua API.

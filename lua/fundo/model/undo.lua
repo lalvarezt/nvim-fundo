@@ -289,7 +289,8 @@ function Undo:saveBaseline(snapshot)
         baselineOnly = true, name = self.name, undoPath = self.undoPath,
         fallbackPath = self.fallbackPath, baselinePath = self.baselinePath, contents = contents,
         capturedAt = snapshot and snapshot.capturedAt or os.time(),
-        expectedGeneration = snapshot and snapshot.expectedGeneration or self.generation,
+        expectedGeneration = snapshot and snapshot.expectedGeneration or self.generation or false,
+        createdGenerations = snapshot and snapshot.createdGenerations or self.createdGenerations,
     }
     local stage = 'baseline'
     local ok, err = pcall(function()
@@ -337,10 +338,13 @@ function Undo:saveBaseline(snapshot)
             if snapshot then snapshot.expectedGeneration = transfer.expectedGeneration end
         end
         self.lastError = transferError(stage, err)
+        self.createdGenerations = transfer.createdGenerations
+        if snapshot then snapshot.createdGenerations = transfer.createdGenerations end
         pcall(log.warn, 'failed to save baseline archive:', self.baselinePath, err)
         return false, err
     end
     self.lastError = nil
+    self.createdGenerations = nil
     if self.bufnr and api.nvim_buf_is_loaded(self.bufnr) then
         self.lastCapturedTick = snapshot and snapshot.changedtick or api.nvim_buf_get_changedtick(self.bufnr)
     end
@@ -453,6 +457,7 @@ function Undo:textSnapshot()
         baselinePath = self.baselinePath, contents = bufferContents(self.bufnr),
         snapshot_format = 'buffer-lines-v1', baseline_format = 'buffer-lines-v1', capturedAt = os.time(),
         expectedGeneration = self.pendingTransfer and self.pendingTransfer.expectedGeneration or self.generation,
+        createdGenerations = self.pendingTransfer and self.pendingTransfer.createdGenerations or self.createdGenerations,
         changedtick = api.nvim_buf_get_changedtick(self.bufnr),
     }
 end
