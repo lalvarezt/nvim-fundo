@@ -91,16 +91,23 @@ local function readGeneration(fallbackPath, id)
 end
 
 function M.read(fallbackPath)
-    local ok, value = pcall(head, fallbackPath)
-    if not ok then return nil, tostring(value) end
-    if not value then return nil, 'missing' end
-    local loaded, result = pcall(readGeneration, fallbackPath, value.current)
-    if not loaded and value.previous then
-        loaded, result = pcall(readGeneration, fallbackPath, value.previous)
+    for _ = 1, 3 do
+        local ok, value = pcall(head, fallbackPath)
+        if not ok then return nil, tostring(value) end
+        if not value then return nil, 'missing' end
+        local loaded, result = pcall(readGeneration, fallbackPath, value.current)
+        if not loaded and value.previous then
+            loaded, result = pcall(readGeneration, fallbackPath, value.previous)
+        end
+        local checked, latest = pcall(head, fallbackPath)
+        if not checked then return nil, tostring(latest) end
+        if latest and latest.current == value.current and latest.previous == value.previous then
+            if not loaded then return nil, tostring(result) end
+            result.expectedGeneration = value.current
+            return result
+        end
     end
-    if not loaded then return nil, tostring(result) end
-    result.expectedGeneration = value.current
-    return result
+    return nil, 'archive changed repeatedly while reading; retry recovery'
 end
 
 local function release(lock)
