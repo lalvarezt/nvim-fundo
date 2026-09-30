@@ -8,6 +8,7 @@ local manifest = require('fundo.manifest')
 local path = require('fundo.fs.path')
 local utils = require('fundo.utils')
 local storage = require('fundo.storage')
+local journal = require('fundo.journal')
 
 local M = {}
 
@@ -264,6 +265,11 @@ function M.doctor()
     end
 
     local pendingPaths = {}
+    local journalRecords, journalErrors = journal.list(config.archives_dir, true)
+    for _, record in ipairs(journalRecords) do
+        issue('recovery-journal', record.name .. ': ' .. record.journalPath)
+    end
+    for _, err in ipairs(journalErrors) do issue('invalid-journal', err.path .. ': ' .. err.message) end
     local failures = {}
     for key, transfer in pairs(manager.pendingTransfers or {}) do
         pendingPaths[key] = true

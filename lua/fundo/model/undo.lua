@@ -10,6 +10,7 @@ local log = require('fundo.lib.log')
 local config = require('fundo.config')
 local manifest = require('fundo.manifest')
 local storage = require('fundo.storage')
+local journal = require('fundo.journal')
 
 local archiveDirMode = 448 -- 0o700
 
@@ -392,11 +393,17 @@ function Undo.completePendingTransferSync(transfer)
     if transfer.baselineOnly then
         local writer = setmetatable(transfer, {__index = Undo})
         local _, err = writer:saveBaseline(transfer)
-        if err then error(err, 0) end
+        if err then
+            pcall(journal.write, transfer)
+            error(err, 0)
+        end
+        journal.finish(transfer)
         return
     end
-    local stage = 'fallback'
+    local stage = 'journal'
     local ok, err = pcall(function()
+        journal.write(transfer)
+        stage = 'fallback'
         local limit = config.baseline_max_file_size * 1024 * 1024
         transfer.baselineContents = limit > 0 and #transfer.contents <= limit and transfer.contents or nil
         storage.publish(transfer, function()
@@ -416,8 +423,12 @@ function Undo.completePendingTransferSync(transfer)
     end)
     if not ok then
         transfer.lastError = transferError(stage, err)
+        pcall(journal.refresh, transfer)
         error(err, 0)
     end
+    transfer.expectedGeneration = transfer.generation
+    journal.refresh(transfer)
+    journal.finish(transfer)
     transfer.lastError = nil
 end
 
@@ -850,6 +861,12 @@ function Undo:transferSync()
         error(transfer, 0)
     end
     self.lastError = nil
+    if self.pendingTransfer then
+        transfer.supersededJournals = vim.list_extend({}, self.pendingTransfer.supersededJournals or {})
+        if self.pendingTransfer.journalPath then
+            table.insert(transfer.supersededJournals, self.pendingTransfer.journalPath)
+        end
+    end
     self.pendingTransfer = transfer
     Undo.completePendingTransferSync(transfer)
     self:finishTransfer(transfer)
@@ -879,15 +896,22 @@ function Undo:check()
     end
     if self.pendingRecovery then
         if not self:isEmpty() then
-            self.lastError = transferError('undo', 'pending recovery would replace newer undo history')
-            return
+            if not self.pendingRecovery.fromJournal then
+                self.lastError = transferError('undo', 'pending recovery would replace newer undo history')
+                return
+            end
+            local ok, err = pcall(function() storage.retain(self:transferSnapshot()) end)
+            if not ok then self.lastError = transferError('generation', err); return end
         end
         local loaded, reason = self:loadFallBack(self.pendingRecovery)
         if not loaded then
             self.lastError = transferError('undo', reason)
             return
         end
+        self.pendingTransfer = self.pendingRecovery
+        self.generation = self.pendingRecovery.expectedGeneration
         self.pendingRecovery = nil
+        self.checkedNative = true
         self.lastError = nil
         return
     end

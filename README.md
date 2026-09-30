@@ -344,3 +344,10 @@ The project is licensed under a BSD-3-clause license. See [LICENSE](./LICENSE) f
 When native undo differs from a committed Fundo capture, Fundo preserves the native
 tree as a separate generation before loading the committed tree. The default
 `prune_policy = 'preserve'` keeps these competing histories for recovery.
+
+Full text and undo captures are synchronized to a private recovery journal under
+`stdpath('state')/fundo-journal` before archive publication. Failed saves survive
+editor exit. On restart, Fundo recovers a journal whose archive revision still
+matches; conflicting or damaged journals remain available through `:FundoDoctor`.
+Successful publication removes its journal. Explicit record removal also removes
+the matching journals. Source buffers are not written during recovery.
