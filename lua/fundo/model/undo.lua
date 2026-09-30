@@ -150,6 +150,7 @@ function Undo:reset(dirty, bufName)
     if name ~= self.name then
         self.lastError = nil
         self.lastCapturedTick = nil
+        self.checkedNative = false
         self.undoPath = fn.undofile(name)
         self.fallbackPath = Undo.archivePath(name, self.undoPath, self.dir)
         self.baselinePath = self.fallbackPath .. '.base'
@@ -891,7 +892,33 @@ function Undo:check()
         return
     end
     if not self:isEmpty() then
-        log.trace('check skipped; undo tree is not empty:', self.bufnr, self.name or '')
+        if self.checkedNative or self.isDirty then return end
+        local committed, err = storage.read(self.fallbackPath)
+        if committed and not committed.baselineOnly then
+            local captured, native = pcall(self.transferSnapshot, self)
+            if not captured then
+                self.lastError = transferError('capture', native)
+                return
+            end
+            if native.contents ~= committed.contents or native.undoContents ~= committed.undoContents then
+                local retained, id = pcall(storage.retain, native)
+                if not retained then
+                    self.lastError = transferError('generation', id)
+                    return
+                end
+                self.retainedGeneration = id
+                local loaded, reason = self:loadFallBack(committed)
+                if not loaded then
+                    self.lastError = transferError('generation', reason)
+                    return
+                end
+            end
+            self.generation = committed.expectedGeneration
+        elseif err and err ~= 'missing' then
+            self.lastError = transferError('generation', err)
+            return
+        end
+        self.checkedNative = true
         return
     end
     if self.pendingTransfer and self.pendingTransfer.baselineOnly then

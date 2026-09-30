@@ -339,3 +339,8 @@ See [TESTING.md](./TESTING.md) for the recovery cases and validation boundaries.
 ## License
 
 The project is licensed under a BSD-3-clause license. See [LICENSE](./LICENSE) file for details.
+# Competing undo histories
+
+When native undo differs from a committed Fundo capture, Fundo preserves the native
+tree as a separate generation before loading the committed tree. The default
+`prune_policy = 'preserve'` keeps these competing histories for recovery.
