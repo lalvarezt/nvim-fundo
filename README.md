@@ -351,3 +351,8 @@ editor exit. On restart, Fundo recovers a journal whose archive revision still
 matches; conflicting or damaged journals remain available through `:FundoDoctor`.
 Successful publication removes its journal. Explicit record removal also removes
 the matching journals. Source buffers are not written during recovery.
+
+If undo capture fails, Fundo journals a separate text-only copy and keeps the
+capture error visible after buffer unload. It leaves committed undo intact. If
+the journal also fails, Fundo retains the text in a listed recovery buffer and
+reports the failure. Such a buffer still needs saving before editor exit.

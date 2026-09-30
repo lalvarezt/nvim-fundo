@@ -52,6 +52,13 @@ local function logBufferEvent(name, bufnr)
     end
 end
 
+function Manager:finishCaptureFailure(u)
+    local failure = self.captureFailures and self.captureFailures[u.fallbackPath]
+    if failure and failure == u.resolvedCapture then
+        self.captureFailures[u.fallbackPath] = nil
+    end
+end
+
 function Manager:detach(bufnr)
     local u = self.undos[bufnr]
     if u then
@@ -66,11 +73,13 @@ function Manager:detach(bufnr)
             if u.pendingTransfer then
                 self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
             end
+            if u.captureFailure then self.captureFailures[u.fallbackPath] = u.captureFailure end
             u:dispose()
             self.undos[bufnr] = nil
             return false, err
         end
         self.pendingTransfers[u.fallbackPath] = nil
+        self:finishCaptureFailure(u)
         u:dispose()
         self.undos[bufnr] = nil
         log.debug('detached buffer:', bufnr)
@@ -106,6 +115,9 @@ function Manager:forgetName(name)
     self.forgotten = self.forgotten or {}
     self.forgotten[name] = true
     journal.forget(self.archivesDir, name)
+    for key, failure in pairs(self.captureFailures or {}) do
+        if path.normalize(failure.name) == name then self.captureFailures[key] = nil end
+    end
     if self.manualPaths then self.manualPaths[name] = nil end
     for bufnr, u in pairs(self.undos or {}) do
         if path.normalize(u.name) == name then
@@ -316,6 +328,7 @@ function Manager:syncAll(block)
                     local fallbackPath = u.fallbackPath
                     local pending = self.pendingTransfers[fallbackPath]
                     tasks[bufnr] = u:transfer():thenCall(function(value)
+                        self:finishCaptureFailure(u)
                         if self.pendingTransfers[fallbackPath] == pending then
                             self.pendingTransfers[fallbackPath] = nil
                         end
@@ -390,9 +403,11 @@ function Manager:syncAllSync()
             if u:shouldTransfer() then
                 u:transferSync()
                 self.pendingTransfers[u.fallbackPath] = nil
+                self:finishCaptureFailure(u)
             end
         end)
         if not ok then
+            if u.captureFailure then self.captureFailures[u.fallbackPath] = u.captureFailure end
             if u.pendingTransfer then
                 self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
             end
@@ -450,11 +465,14 @@ function Manager:initialize()
     self.forgottenProjects = self.forgottenProjects or {}
     self.manualPaths = self.manualPaths or {}
     self.pendingTransfers = self.pendingTransfers or {}
+    self.captureFailures = self.captureFailures or {}
     local records, errors = journal.list(self.archivesDir)
     self.journalErrors = errors
     for _, record in ipairs(records) do
         local ok, token = pcall(storage.token, record.fallbackPath)
-        if ok and token == record.expectedGeneration and not self.pendingTransfers[record.fallbackPath] then
+        if record.textOnly then
+            self.captureFailures[record.fallbackPath] = self.captureFailures[record.fallbackPath] or record
+        elseif ok and token == record.expectedGeneration and not self.pendingTransfers[record.fallbackPath] then
             self.pendingTransfers[record.fallbackPath] = record
         end
     end
@@ -470,6 +488,7 @@ function Manager:initialize()
             if b.pendingTransfer then
                 self.pendingTransfers[b.pendingTransfer.fallbackPath] = b.pendingTransfer
             end
+            if b.captureFailure then self.captureFailures[b.fallbackPath] = b.captureFailure end
             b:dispose()
         end
         self.initialized = false

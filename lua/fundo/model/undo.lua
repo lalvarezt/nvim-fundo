@@ -390,6 +390,7 @@ local function saveBaselineSnapshot(transfer)
 end
 
 function Undo.completePendingTransferSync(transfer)
+    assert(not transfer.textOnly, 'text-only recovery copies require explicit recovery; committed undo is preserved')
     if transfer.baselineOnly then
         local writer = setmetatable(transfer, {__index = Undo})
         local _, err = writer:saveBaseline(transfer)
@@ -446,8 +447,45 @@ function Undo.completePendingTransfer(transfer)
     end)
 end
 
+function Undo:textSnapshot()
+    return {
+        name = self.name, undoPath = self.undoPath, fallbackPath = self.fallbackPath,
+        baselinePath = self.baselinePath, contents = bufferContents(self.bufnr),
+        snapshot_format = 'buffer-lines-v1', baseline_format = 'buffer-lines-v1', capturedAt = os.time(),
+        expectedGeneration = self.pendingTransfer and self.pendingTransfer.expectedGeneration or self.generation,
+        changedtick = api.nvim_buf_get_changedtick(self.bufnr),
+    }
+end
+
+function Undo:recordCaptureFailure(err)
+    self.lastError = transferError('capture', err)
+    local text = self:textSnapshot()
+    if self.captureFailure and self.captureFailure.contents == text.contents and self.captureFailure.journalPath then
+        self.captureFailure.lastError = self.lastError
+        pcall(journal.refresh, self.captureFailure)
+        return
+    end
+    text.textOnly, text.lastError = true, self.lastError
+    self.captureFailure = text
+    local saved, failure = pcall(journal.write, text)
+    if not saved then
+        text.journalError = tostring(failure)
+        local ok, bufnr = pcall(function()
+            local buffer = api.nvim_create_buf(true, true)
+            local lines = vim.split(text.contents, '\n', {plain = true})
+            table.remove(lines)
+            api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
+            vim.bo[buffer].modified = true
+            return buffer
+        end)
+        if ok then text.recoveryBuffer = bufnr end
+        vim.notify('Fundo could not save a recovery copy for ' .. self.name .. ': ' .. tostring(failure)
+            .. (ok and ('; text preserved in buffer ' .. bufnr) or ''), vim.log.levels.WARN)
+    end
+end
+
 function Undo:transferSnapshot()
-    local bufferText = bufferContents(self.bufnr)
+    local snapshot = self:textSnapshot()
     local temporary = fn.tempname()
     local ok, err = self:saveUndo(temporary)
     if not ok then
@@ -478,19 +516,8 @@ function Undo:transferSnapshot()
     if not closed then
         error(closeErr)
     end
-    return {
-        name = self.name,
-        undoPath = self.undoPath,
-        fallbackPath = self.fallbackPath,
-        baselinePath = self.baselinePath,
-        contents = bufferText,
-        undoContents = contents,
-        snapshot_format = 'buffer-lines-v1',
-        baseline_format = 'buffer-lines-v1',
-        capturedAt = os.time(),
-        expectedGeneration = self.pendingTransfer and self.pendingTransfer.expectedGeneration or self.generation,
-        changedtick = api.nvim_buf_get_changedtick(self.bufnr),
-    }
+    snapshot.undoContents = contents
+    return snapshot
 end
 
 function Undo:readBaseline()
@@ -857,7 +884,7 @@ function Undo:transferSync()
     log.debug('transferSync started:', self.bufnr, self.name or '')
     local captured, transfer = pcall(self.transferSnapshot, self)
     if not captured then
-        self.lastError = transferError('capture', transfer)
+        self:recordCaptureFailure(transfer)
         error(transfer, 0)
     end
     self.lastError = nil
@@ -882,6 +909,11 @@ function Undo:finishTransfer(transfer)
     self.isDirty = false
     self.lastAction = 'transferred'
     self.lastUpdated = os.time()
+    if self.captureFailure and self.captureFailure.contents == transfer.contents then
+        journal.finish(self.captureFailure)
+        self.resolvedCapture = self.captureFailure
+        self.captureFailure = nil
+    end
     log.debug('transferSync completed:', self.bufnr, transfer.name, 'fallback:', transfer.fallbackPath)
 end
 
@@ -921,7 +953,7 @@ function Undo:check()
         if committed and not committed.baselineOnly then
             local captured, native = pcall(self.transferSnapshot, self)
             if not captured then
-                self.lastError = transferError('capture', native)
+                self:recordCaptureFailure(native)
                 return
             end
             if native.contents ~= committed.contents or native.undoContents ~= committed.undoContents then

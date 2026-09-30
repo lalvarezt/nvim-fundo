@@ -70,6 +70,8 @@ function M.status(target)
     local pending = (tracked and tracked.pendingTransfer ~= nil)
         or (manager.pendingTransfers and manager.pendingTransfers[fallbackPath] ~= nil) or false
     local failure = lastError(tracked, manager.pendingTransfers and manager.pendingTransfers[fallbackPath])
+        or (manager.captureFailures and manager.captureFailures[fallbackPath]
+            and manager.captureFailures[fallbackPath].lastError)
     local manifestValue, manifestError
     if manifestPath ~= '' then
         manifestValue, manifestError = manifest.read(manifestPath, fallbackPath)
@@ -271,6 +273,12 @@ function M.doctor()
     end
     for _, err in ipairs(journalErrors) do issue('invalid-journal', err.path .. ': ' .. err.message) end
     local failures = {}
+    for key, capture in pairs(manager.captureFailures or {}) do
+        if path.dirname(key) == config.archives_dir then
+            pendingPaths[key] = true
+            failures[key] = {name = capture.name, error = capture.lastError}
+        end
+    end
     for key, transfer in pairs(manager.pendingTransfers or {}) do
         pendingPaths[key] = true
         if transfer.lastError then
