@@ -153,4 +153,48 @@ describe('generation recovery across processes.', function()
         ]])
         assert.same({'true', 'true', 'original', 'saved', 'true', 'saved'}, result)
     end)
+
+    it('preserves committed history when enabled on a modified buffer from an older session.', function()
+        local result = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'shared'})
+            vim.cmd('write')
+            local manager, fundo = require('fundo.manager'), require('fundo')
+            assert(manager:syncAllSync())
+            dofile('spec/helper/session.lua').run({tmpdir = vim.fn.fnamemodify(FILE, ':h'),
+                archives_dir = require('fundo.config').archives_dir, undo_dir = vim.o.undodir, file = FILE,
+                report = vim.fn.fnamemodify(FILE, ':h') .. '/nested-report', body = [=[
+                    vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+                    for _, text in ipairs({'other session work', 'shared'}) do
+                        vim.cmd('let &l:undolevels = &l:undolevels')
+                        vim.api.nvim_buf_set_lines(0, 0, -1, false, {text})
+                        vim.cmd('write')
+                        assert(require('fundo.manager'):syncAllSync())
+                    end
+                    vim.cmd('quitall!')
+                ]=]})
+            local u = manager:get(vim.api.nvim_get_current_buf())
+            local committed = require('fundo.storage').read(u.fallbackPath)
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'live draft'})
+            fundo.disable()
+            fundo.enable()
+            assert(manager:syncAllSync())
+            vim.cmd('let &l:undolevels = &l:undolevels')
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'later draft'})
+            assert(manager:syncAllSync())
+            local preserved = false
+            for _, candidate in ipairs(fundo.recovery_candidates(FILE)) do
+                if candidate.id == committed.generation then preserved = true end
+            end
+            local text = 'missing'
+            if preserved then
+                local opened = fundo.recover(committed.generation, FILE)
+                vim.api.nvim_buf_call(opened.bufnr, function() vim.cmd('undo') end)
+                text = table.concat(vim.api.nvim_buf_get_lines(opened.bufnr, 0, -1, false), '|')
+            end
+            WriteReport({tostring(preserved), text, BufferText()})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'true', 'other session work', 'later draft'}, result)
+    end)
 end)

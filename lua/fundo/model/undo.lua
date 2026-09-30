@@ -461,6 +461,7 @@ function Undo:textSnapshot()
         expectedGeneration = self.pendingTransfer and self.pendingTransfer.expectedGeneration or self.generation,
         createdGenerations = self.pendingTransfer and self.pendingTransfer.createdGenerations or self.createdGenerations,
         changedtick = api.nvim_buf_get_changedtick(self.bufnr),
+        retainPrevious = not self.checkedNative,
     }
 end
 
@@ -918,6 +919,7 @@ function Undo:finishTransfer(transfer)
     self.lastAction = 'transferred'
     self.lastUpdated = os.time()
     self.lastDurableAt = transfer.durableAt or os.time()
+    if not transfer.baselineOnly then self.checkedNative = true end
     require('fundo.checkpoint').cancel(self)
     if self.captureFailure and self.captureFailure.contents == transfer.contents then
         journal.finish(self.captureFailure)
@@ -996,7 +998,7 @@ function Undo:check()
     if committed then
         self.generation = committed.expectedGeneration
         local loaded, reason = self:loadFallBack(committed)
-        if loaded then return end
+        if loaded then self.checkedNative = true; return end
         if not committed.baselineOnly then
             self.lastError = transferError('generation', reason or 'committed undo could not be loaded')
             return
