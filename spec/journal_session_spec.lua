@@ -42,4 +42,34 @@ describe('durable pending recovery.', function()
         ]])
         assert.same({'saved', 'unsaved work'}, second)
     end)
+
+    it('retains text and diagnostics when undo capture fails during unload.', function()
+        local first = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+            vim.cmd('write')
+            local manager = require('fundo.manager')
+            assert(manager:syncAllSync())
+            local bufnr = vim.api.nvim_get_current_buf()
+            local u = manager:get(bufnr)
+            vim.cmd('let &l:undolevels = &l:undolevels')
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'uncaptured work'})
+            u.saveUndo = function() return false, 'undo capture outage' end
+            vim.cmd('enew!')
+            vim.cmd('bunload! ' .. bufnr)
+            local records = require('fundo.journal').list(require('fundo.config').archives_dir, true)
+            WriteReport({tostring(manager:get(bufnr) == nil), tostring(require('fundo').doctor().ok),
+                records[1] and records[1].contents:gsub('\n$', '') or 'missing',
+                require('fundo').status(FILE).last_error and 'failure retained' or 'missing error'})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'true', 'false', 'uncaptured work', 'failure retained'}, first)
+        local second = run([[
+            local records = require('fundo.journal').list(require('fundo.config').archives_dir, true)
+            WriteReport({records[1].contents:gsub('\n$', ''), tostring(records[1].textOnly),
+                tostring(require('fundo').doctor().ok)})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'uncaptured work', 'true', 'false'}, second)
+    end)
 end)
