@@ -863,65 +863,6 @@ describe('fundo integration.', function()
         assert_history_restores_to({'clean'})
     end)
 
-    it('restores undo history after wipeout and external file changes.', function()
-        fn.writefile({'one'}, file)
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
-        vim.cmd('write')
-        vim.cmd('bwipeout!')
-
-        assert.are_not.equal(0, #archives())
-
-        fn.writefile({'external', 'change'}, file)
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        assert.same({'external', 'change'}, buffer_lines())
-
-        assert_history_restores_to({'one', 'two'})
-    end)
-
-    it('restores undo history after unload and external file changes.', function()
-        local other = path.join(tmpdir, 'other.txt')
-        fn.writefile({'one'}, file)
-        fn.writefile({'placeholder'}, other)
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        vim.bo.bufhidden = 'unload'
-        api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
-        vim.cmd('write')
-        vim.cmd('edit ' .. fn.fnameescape(other))
-
-        assert.are_not.equal(0, #archives())
-
-        fn.writefile({'external', 'change'}, file)
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        assert.same({'external', 'change'}, buffer_lines())
-
-        assert_history_restores_to({'one', 'two'})
-    end)
-
-    it('persists undo history when the native undo file is missing during unload.', function()
-        local other = path.join(tmpdir, 'other.txt')
-        fn.writefile({'one'}, file)
-        fn.writefile({'placeholder'}, other)
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        vim.bo.bufhidden = 'unload'
-        api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
-        vim.cmd('write')
-
-        fn.delete(fn.undofile(file))
-        clear_archives()
-
-        vim.cmd('edit ' .. fn.fnameescape(other))
-
-        assert.equal('file', fn.getftype(fn.undofile(file)))
-        assert.are_not.equal(0, #archives())
-
-        fn.writefile({'external', 'change'}, file)
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        assert.same({'external', 'change'}, buffer_lines())
-
-        assert_history_restores_to({'one', 'two'})
-    end)
-
     it('archives an existing clean undo tree before Neovim is closed.', function()
         fn.writefile({'one'}, file)
         vim.cmd('edit ' .. fn.fnameescape(file))
@@ -940,22 +881,6 @@ describe('fundo integration.', function()
 
         fn.writefile({'external', 'change'}, file)
         vim.cmd('edit ' .. fn.fnameescape(file))
-        assert.same({'external', 'change'}, buffer_lines())
-
-        assert_history_restores_to({'one', 'two'})
-    end)
-
-    it('restores undo history after loaded buffer external file changes.', function()
-        fn.writefile({'one'}, file)
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        api.nvim_buf_set_lines(0, 0, -1, false, {'one', 'two'})
-        vim.cmd('write')
-        sync_all()
-
-        assert.are_not.equal(0, #archives())
-
-        fn.writefile({'external', 'change'}, file)
-        vim.cmd('checktime')
         assert.same({'external', 'change'}, buffer_lines())
 
         assert_history_restores_to({'one', 'two'})
@@ -1014,41 +939,6 @@ describe('fundo integration.', function()
 
         assert.same({'external', 'version-b'}, buffer_lines())
         assert_history_restores_to({'one', 'two'}, {'external', 'version-b'})
-    end)
-
-    it('restores undo history after explicit bunload and external file changes.', function()
-        local other = path.join(tmpdir, 'other.txt')
-
-        fn.writefile({'one'}, file)
-        fn.writefile({'placeholder'}, other)
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        edit_and_write({'one', 'two'})
-        vim.cmd('edit ' .. fn.fnameescape(other))
-        vim.cmd('buffer ' .. fn.fnameescape(file))
-        vim.cmd('bunload')
-
-        assert.are_not.equal(0, #archives())
-
-        external_write({'external', 'change'})
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        assert.same({'external', 'change'}, buffer_lines())
-
-        assert_history_restores_to({'one', 'two'})
-    end)
-
-    it('restores undo history after bdelete and external file changes.', function()
-        fn.writefile({'one'}, file)
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        edit_and_write({'one', 'two'})
-        vim.cmd('bdelete')
-
-        assert.are_not.equal(0, #archives())
-
-        external_write({'external', 'change'})
-        vim.cmd('edit ' .. fn.fnameescape(file))
-        assert.same({'external', 'change'}, buffer_lines())
-
-        assert_history_restores_to({'one', 'two'})
     end)
 
     it('tracks the saveas path for later external changes.', function()
@@ -1176,6 +1066,26 @@ describe('fundo integration.', function()
             },
         }
 
+        for _, command in ipairs({'bunload', 'bdelete'}) do
+            table.insert(close_scenarios, {
+                name = command,
+                before_edit = function() end,
+                persist = function()
+                    local bufnr = api.nvim_get_current_buf()
+                    vim.cmd('enew')
+                    vim.cmd(command .. ' ' .. bufnr)
+                end,
+                restore = function() vim.cmd('edit ' .. fn.fnameescape(file)) end,
+            })
+        end
+
+        local function remove_record()
+            local u = manager:get(api.nvim_get_current_buf())
+            require('fundo.storage').remove(u.fallbackPath)
+            clear_archives()
+            assert.equal(0, fn.isdirectory(require('fundo.storage').directory(u.fallbackPath)))
+        end
+
         local missing_artifact_scenarios = {
             {
                 name = 'all-artifacts-present',
@@ -1189,13 +1099,13 @@ describe('fundo integration.', function()
             },
             {
                 name = 'archive-missing',
-                mutate = clear_archives,
+                mutate = remove_record,
             },
             {
                 name = 'native-undo-and-archive-missing',
                 mutate = function()
                     fn.delete(fn.undofile(file))
-                    clear_archives()
+                    remove_record()
                 end,
             },
         }
@@ -1232,6 +1142,13 @@ describe('fundo integration.', function()
 
                     assert.same({'external', 'change'}, buffer_lines())
                     assert_history_restores_to({'one', 'two', 'three'})
+                    vim.cmd('undo')
+                    vim.cmd('undo')
+                    assert.same({'one', 'two'}, buffer_lines())
+                    vim.cmd('redo')
+                    assert.same({'one', 'two', 'three'}, buffer_lines())
+                    vim.cmd('redo')
+                    assert.same({'external', 'change'}, buffer_lines())
                 end)
             end
         end
