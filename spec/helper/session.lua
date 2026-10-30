@@ -52,9 +52,15 @@ function M.run(opts)
         '    vim.fn.writefile(items, REPORT)',
         'end',
     }
+    table.insert(lines, 'local session_ok, session_error = xpcall(function()')
     for line in (opts.body .. '\n'):gmatch('([^\n]*)\n') do
         table.insert(lines, line)
     end
+    table.insert(lines, 'end, debug.traceback)')
+    table.insert(lines, 'if not session_ok then')
+    table.insert(lines, '    io.stderr:write(tostring(session_error) .. "\\n")')
+    table.insert(lines, '    os.exit(1)')
+    table.insert(lines, 'end')
 
     fn.writefile(lines, script)
 
