@@ -139,3 +139,22 @@ A sustained typing check on a 100,000-line file preserved all input, Insert
 mode, and undo grouping. A main-loop heartbeat observed a maximum gap of about
 171 ms during this run. Large synchronous captures can still interrupt UI
 responsiveness. This was a local observation, not a latency guarantee.
+
+The next terminal pass compared identical key sequences in clean Neovim
+sessions with and without Fundo. It checked Replace-mode backspacing,
+visual-block insertion, keyword completion, macro recording and playback,
+Ctrl-O commands from Insert mode, competing undo branches, substitute previews,
+hidden-buffer checkpoints, writes from Insert mode, and `undolevels=0`.
+Snapshots compared text, mode, cursor, register bytes, and undo position.
+`spec/input_workflow_spec.lua` now exercises nine of these workflows through
+`nvim_input()`, yielding to the editor between steps and waiting for captures.
+
+This pass found stale destinations after changing `undodir` with buffers open.
+Transfers now resolve the current destination, refresh baseline metadata, and
+keep superseded retry records until the replacement commits. Tests cover
+ordinary directories, adjacent undo files, clean and deferred baselines,
+pending failures, empty `undodir`, and recovery after restart. Both synchronous
+and asynchronous syncs verify that an old retry cannot run alongside the active
+capture after its archive key changes.
+Child test sessions disable swap files by default and use an isolated swap
+directory if a test enables them.
