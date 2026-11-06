@@ -251,6 +251,12 @@ function Undo:baselineEligibility()
     return 'eligible', size
 end
 
+function Undo:canPersist()
+    if not api.nvim_buf_is_loaded(self.bufnr) then return false end
+    local bt = vim.bo[self.bufnr].buftype
+    return (bt == '' or bt == 'acwrite') and not undoDisabled(self.bufnr)
+end
+
 function Undo:canSaveBaseline(stat)
     local limit = self:baselineLimitBytes()
     if limit <= 0 or not stat then
@@ -373,6 +379,12 @@ function Undo:queueBaseline()
     self.pendingTransfer = snapshot
     vim.schedule(function()
         if not self.attached or self.pendingTransfer ~= snapshot then return end
+        -- BufReadPost handlers and modelines run after attachment. Honor their
+        -- final buffer options before publishing the deferred opening snapshot.
+        if not self:canPersist() then
+            self.pendingTransfer = nil
+            return
+        end
         local dirty = self.isDirty
         local ok, err = pcall(Undo.completePendingTransferSync, snapshot)
         if ok then
@@ -812,8 +824,12 @@ function Undo:shouldTransfer()
     if not self.attached or self.undoPath == '' then
         return logTransferDecision(self, false, self.attached and 'empty-undo-path' or 'not-attached')
     end
-    if not (vim.in_fast_event and vim.in_fast_event()) and undoDisabled(self.bufnr) then
-        return logTransferDecision(self, false, 'undo-disabled')
+    if not (vim.in_fast_event and vim.in_fast_event()) and not self:canPersist() then
+        -- An opening snapshot that has never been published must not become a
+        -- detached retry after the buffer opts out of persistence.
+        local pending = self.pendingTransfer
+        if pending and pending.baselineOnly and not pending.lastError then self.pendingTransfer = nil end
+        return logTransferDecision(self, false, 'buffer-ineligible')
     end
     if self.lastError or self.pendingTransfer then
         return logTransferDecision(self, true, 'retry')
@@ -943,7 +959,7 @@ function Undo:check()
         return
     end
     if vim.bo[self.bufnr].modified or not vim.bo[self.bufnr].modifiable
-        or undoDisabled(self.bufnr) then
+        or not self:canPersist() then
         return
     end
     if self.pendingRecovery then

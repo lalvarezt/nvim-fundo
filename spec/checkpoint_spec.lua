@@ -14,6 +14,40 @@ describe('edit checkpoints.', function()
             archives_dir = dir .. '/archives', checkpoint = checkpoint or {enabled = true}, body = body}).lines
     end
 
+    it('skips unchanged unsaved work on repeated explicit syncs and saves the next edit.', function()
+        local result = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'first draft'})
+            local fundo, manager = require('fundo'), require('fundo.manager')
+            local u = manager:get(vim.api.nvim_get_current_buf())
+            assert(vim.wait(2000, function() return u.lastCapturedTick == vim.b.changedtick end))
+            local function sync()
+                local finished, failure = false, nil
+                fundo.sync():thenCall(function() finished = true end, function(err)
+                    failure, finished = err, true
+                end)
+                assert(vim.wait(2000, function() return finished end))
+                assert(not failure, tostring(failure))
+            end
+            local fs = require('fundo.fs')
+            local write, writes = fs.writeFileSync, 0
+            fs.writeFileSync = function(...)
+                writes = writes + 1
+                return write(...)
+            end
+            for _ = 1, 20 do sync() end
+            local unchangedWrites = writes
+            vim.cmd('let &l:undolevels = &l:undolevels')
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'next draft'})
+            sync()
+            fs.writeFileSync = write
+            WriteReport({tostring(unchangedWrites), require('fundo.storage').read(u.fallbackPath).contents:gsub('\n$', ''),
+                tostring(vim.bo.modified), vim.fn.readfile(FILE)[1]})
+            vim.cmd('quitall!')
+        ]], {enabled = true, debounce_ms = 30, max_delay_ms = 100})
+        assert.same({'0', 'next draft', 'true', 'original'}, result)
+    end)
+
     it('checkpoints ordinary API edits before exit without lifecycle events.', function()
         run([[
             vim.o.swapfile = false
@@ -23,7 +57,8 @@ describe('edit checkpoints.', function()
             assert(require('fundo.manager'):syncAllSync())
             vim.cmd('let &l:undolevels = &l:undolevels')
             vim.api.nvim_buf_set_lines(0, 0, -1, false, {'recent draft'})
-            vim.wait(1500, function() return false end, 10)
+            local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+            assert(vim.wait(5000, function() return u.lastCapturedTick == vim.b.changedtick end, 10))
             os.exit(0)
         ]])
         local result = run([[
@@ -36,6 +71,104 @@ describe('edit checkpoints.', function()
         ]])
         assert.same({'saved', 'recent draft', 'saved'}, result)
     end)
+
+    for _, case in ipairs({
+        {name = 'normal-mode edits', edit = [[vim.cmd('normal! gg0Cnormal draft')]], text = 'normal draft'},
+        {name = 'substitutions', edit = [[vim.cmd('%s/saved/substitute draft/')]], text = 'substitute draft'},
+        {name = 'multiline API edits', edit = [[vim.api.nvim_buf_set_text(0, 0, 0, 0, 5, {'API α', 'draft'})]],
+            text = 'API α|draft'},
+        {name = 'register puts', edit = [[vim.fn.setreg('a', {'put draft'}, 'l'); vim.cmd('normal! "ap')]],
+            text = 'saved|put draft'},
+        {name = 'file reads', edit = [[vim.fn.writefile({'read draft'}, FILE .. '.append')
+            vim.cmd('$read ' .. vim.fn.fnameescape(FILE .. '.append'))]], text = 'saved|read draft'},
+        {name = 'acwrite buffers', edit = [[vim.bo.buftype = 'acwrite'
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'acwrite draft'})]], text = 'acwrite draft'},
+    }) do
+        it('recovers checkpoints of ' .. case.name .. ' with undo and redo after restart.', function()
+            run(([=[
+                vim.o.swapfile = false
+                vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+                vim.api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+                vim.cmd('write')
+                assert(require('fundo.manager'):syncAllSync())
+                vim.cmd('let &l:undolevels = &l:undolevels')
+                %s
+                assert(BufferText() == %q)
+                local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+                assert(vim.wait(2000, function() return u.lastCapturedTick == vim.b.changedtick end, 10))
+                os.exit(0)
+            ]=]):format(case.edit, case.text), {enabled = true, debounce_ms = 30, max_delay_ms = 100})
+            local result = run([[
+                vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+                assert(BufferText() == 'saved')
+                vim.cmd('undo')
+                local draft = BufferText()
+                vim.cmd('undo')
+                assert(BufferText() == 'saved')
+                vim.cmd('undo')
+                assert(BufferText() == 'original')
+                for _ = 1, 3 do vim.cmd('redo') end
+                WriteReport({draft, BufferText(), vim.fn.readfile(FILE)[1]})
+                vim.cmd('quitall!')
+            ]])
+            assert.same({case.text, 'saved', 'saved'}, result)
+        end)
+    end
+
+    it('preserves the redo branch when a checkpoint captures an undone edit.', function()
+        run([[
+            vim.o.swapfile = false
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+            vim.cmd('write')
+            assert(require('fundo.manager'):syncAllSync())
+            vim.cmd('let &l:undolevels = &l:undolevels')
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'draft'})
+            vim.cmd('undo')
+            local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+            assert(vim.wait(2000, function() return u.lastCapturedTick == vim.b.changedtick end, 10))
+            os.exit(0)
+        ]], {enabled = true, debounce_ms = 30, max_delay_ms = 100})
+        local result = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            assert(BufferText() == 'saved')
+            vim.cmd('redo')
+            local draft = BufferText()
+            vim.cmd('undo')
+            vim.cmd('undo')
+            WriteReport({draft, BufferText(), vim.fn.readfile(FILE)[1]})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'draft', 'original', 'saved'}, result)
+    end)
+
+    for _, option in ipairs({
+        {disable = 'noundofile', enable = 'undofile'},
+        {disable = 'undolevels=-1', enable = 'undolevels=1000'},
+        {disable = 'buftype=nofile', enable = 'buftype='},
+    }) do
+        it('pauses persistence for ' .. option.disable .. ' and resumes after it is restored.', function()
+            local result = run(([=[
+                vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+                vim.api.nvim_buf_set_lines(0, 0, -1, false, {'first draft'})
+                local manager, storage = require('fundo.manager'), require('fundo.storage')
+                assert(manager:syncAllSync())
+                local u = manager:get(vim.api.nvim_get_current_buf())
+                local revision = storage.revision(u.fallbackPath)
+                vim.cmd('setlocal %s')
+                vim.api.nvim_buf_set_lines(0, 0, -1, false, {'excluded draft'})
+                assert(u.checkpointTimer == nil)
+                assert(manager:syncAllSync())
+                assert(revision == storage.revision(u.fallbackPath))
+                vim.cmd('setlocal %s')
+                vim.api.nvim_buf_set_lines(0, 0, -1, false, {'resumed draft'})
+                assert(vim.wait(2000, function() return u.lastCapturedTick == vim.b.changedtick end, 10))
+                WriteReport({storage.read(u.fallbackPath).contents:gsub('\n$', ''), vim.fn.readfile(FILE)[1]})
+                vim.cmd('quitall!')
+            ]=]):format(option.disable, option.enable), {enabled = true, debounce_ms = 30, max_delay_ms = 100})
+            assert.same({'resumed draft', 'original'}, result)
+        end)
+    end
 
     it('bounds checkpoint delay while edits continue.', function()
         local result = run([[
@@ -62,7 +195,7 @@ describe('edit checkpoints.', function()
             local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
             assert(u.pendingTransfer and u.pendingTransfer.baselineOnly)
             vim.api.nvim_buf_set_lines(0, 0, -1, false, {'immediate draft'})
-            vim.wait(250, function() return false end, 10)
+            assert(vim.wait(2000, function() return u.lastCapturedTick == vim.b.changedtick end, 10))
             os.exit(0)
         ]], {enabled = true, debounce_ms = 30, max_delay_ms = 100})
         local result = run([[
@@ -86,7 +219,10 @@ describe('edit checkpoints.', function()
                 return write(target, ...)
             end
             vim.api.nvim_buf_set_lines(0, 0, -1, false, {'checkpoint draft'})
-            vim.wait(250, function() return false end, 10)
+            local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+            assert(vim.wait(2000, function()
+                return u.pendingTransfer and u.pendingTransfer.lastError ~= nil
+            end, 10))
             local records = require('fundo.journal').list(config.archives_dir, true)
             WriteReport({records[1] and records[1].contents:gsub('\n$', '') or 'missing',
                 tostring(require('fundo').status().last_error ~= nil)})
@@ -120,7 +256,9 @@ describe('edit checkpoints.', function()
             local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
             vim.cmd('enew')
             vim.api.nvim_buf_set_lines(u.bufnr, 0, -1, false, {'hidden draft'})
-            vim.wait(250, function() return false end, 10)
+            assert(vim.wait(2000, function()
+                return u.lastCapturedTick == vim.api.nvim_buf_get_changedtick(u.bufnr)
+            end, 10))
             local capture = require('fundo.storage').read(u.fallbackPath)
             WriteReport({capture.contents:gsub('\n$', ''), table.concat(vim.fn.readfile(FILE), '|')})
             vim.cmd('quitall!')

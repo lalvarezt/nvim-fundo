@@ -3,10 +3,11 @@
 Run `make test` and `make lint` from the repository. The tests use isolated
 files and archive directories. The session specs launch clean child Neovim
 processes to verify persistence across an actual exit and restart.
+To check test-order independence, run `make test BUSTED_ARGS="--shuffle --seed=48271"`.
 
 Regression tests reproduce the reported failures before their fixes. Run the
 commands above for the current test count and lint results. Validation uses
-Neovim 0.12.5. Only the latest stable Neovim release is supported.
+Neovim 0.12.6. Only the latest stable Neovim release is supported.
 
 The review corrected these cases:
 
@@ -107,3 +108,17 @@ and verify that the same transfer can complete on retry. Storage tests count
 directory entries visited during publication with unrelated interrupted captures
 present. Preservation mode retires obsolete committed generations without
 enumerating those captures.
+
+Deferred baseline tests cover later `BufReadPost` handlers and modelines that
+disable persistent undo or change the buffer type. They also verify that an
+opted-out opening snapshot is not saved after disabling and re-enabling Fundo.
+Checkpoint tests cover option changes after attachment and resume persistence
+when the buffer becomes eligible again.
+
+Checkpoint restart tests exercise normal-mode edits, substitutions, register
+puts, file reads, multiline API edits, and `acwrite` buffers. They verify undo,
+redo, and unchanged source files after exiting without lifecycle saves. Another
+case checks that a checkpoint taken after undo preserves the redo branch.
+Successful checkpoint tests wait for the captured change tick instead of a
+fixed delay. A write-count regression checks that repeated `FundoSync` calls
+perform no writes for an unchanged unsaved buffer and still save its next edit.
