@@ -25,6 +25,60 @@ describe('baseline metadata policy.', function()
         }).lines
     end
 
+    for _, option in ipairs({'noundofile', 'undolevels=-1', 'buftype=nofile', 'buftype=nowrite'}) do
+        it('honors ' .. option .. ' set by a later BufReadPost handler.', function()
+            local lines = run(([=[
+                vim.api.nvim_create_autocmd('BufReadPost', {callback = function()
+                    vim.cmd('setlocal %s')
+                end})
+                vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+                local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+                local drained = false
+                vim.schedule(function() drained = true end)
+                assert(vim.wait(1000, function() return drained end))
+                assert(require('fundo.manager'):syncAllSync())
+                WriteReport({tostring(vim.fn.filereadable(u.baselinePath)),
+                    tostring(require('fundo.storage').token(u.fallbackPath))})
+                vim.cmd('quitall!')
+            ]=]):format(option))
+            assert.same({'0', 'false'}, lines)
+        end)
+    end
+
+    it('does not retain an opted-out opening snapshot across disable and enable.', function()
+        local lines = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local fundo, manager = require('fundo'), require('fundo.manager')
+            local u = manager:get(vim.api.nvim_get_current_buf())
+            vim.bo.undofile = false
+            fundo.disable()
+            fundo.enable()
+            assert(manager:syncAllSync())
+            WriteReport({tostring(vim.fn.filereadable(u.baselinePath)),
+                tostring(require('fundo.storage').token(u.fallbackPath))})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'0', 'false'}, lines)
+    end)
+
+    it('honors a modeline that disables persistent undo.', function()
+        local lines = run([[
+            vim.o.modeline = true
+            vim.o.modelines = 5
+            vim.fn.writefile({'original', 'vim: set noundofile:'}, FILE)
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            assert(not vim.bo.undofile)
+            local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+            local drained = false
+            vim.schedule(function() drained = true end)
+            assert(vim.wait(1000, function() return drained end))
+            assert(require('fundo.manager'):syncAllSync())
+            WriteReport({tostring(vim.fn.filereadable(u.baselinePath))})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'0'}, lines)
+    end)
+
     it('removes metadata when setup disables a baseline-only record.', function()
         local lines = run([[
             local fundo = require('fundo')

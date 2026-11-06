@@ -13,7 +13,7 @@ end
 
 local function queue(tracked, completed)
     local settings = require('fundo.config').checkpoint
-    if not settings.enabled or not tracked.attached or tracked.recoveryBackup then return end
+    if not settings.enabled or not tracked.attached or tracked.recoveryBackup or not tracked:canPersist() then return end
     local now = uv.hrtime() / 1e6
     tracked.checkpointStarted = tracked.checkpointStarted or now
     local delay = math.max(1, math.min(settings.debounce_ms,
