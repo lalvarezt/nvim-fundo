@@ -25,12 +25,15 @@ function M.run(opts)
 
     fn.mkdir(cache, 'p')
     fn.mkdir(state, 'p')
+    fn.mkdir(path.join(state, 'swap'), 'p')
     fn.mkdir(data, 'p')
 
     local lines = {
         'vim.env.XDG_CACHE_HOME = ' .. quote(cache),
         'vim.env.XDG_STATE_HOME = ' .. quote(state),
         'vim.env.XDG_DATA_HOME = ' .. quote(data),
+        'vim.o.directory = ' .. quote(path.join(state, 'swap') .. '//'),
+        'vim.o.swapfile = false',
         'vim.opt.runtimepath:prepend(' .. quote(repo) .. ')',
         'package.path = ' .. quote(repo .. '/lua/?.lua;' .. repo .. '/lua/?/init.lua;') .. ' .. package.path',
         'vim.o.undofile = true',

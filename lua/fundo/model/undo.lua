@@ -196,6 +196,36 @@ function Undo:isEmpty()
     return not res:match('^number')
 end
 
+function Undo:refreshUndoPath()
+    local destination = fn.undofile(self.name)
+    if destination == self.undoPath then return end
+    local fallback = Undo.archivePath(self.name, destination, self.dir)
+    local changedRecord = fallback ~= self.fallbackPath
+    if changedRecord then
+        self.generation = storage.token(fallback)
+        self.createdGenerations = nil
+        self.checkedNative = false
+    end
+    local pending = self.pendingTransfer
+    if pending then
+        -- Keep the original retry identity until the new destination commits.
+        local replacement = vim.tbl_extend('force', pending, {
+            undoPath = destination, fallbackPath = fallback, baselinePath = fallback .. '.base',
+        })
+        replacement.supersededTransfers = vim.list_extend({}, pending.supersededTransfers or {})
+        table.insert(replacement.supersededTransfers, pending)
+        if changedRecord then
+            replacement.expectedGeneration = self.generation
+            replacement.generation = nil
+            replacement.createdGenerations = nil
+            replacement.retainPrevious = true
+        end
+        self.pendingTransfer = replacement
+    end
+    self.undoPath, self.fallbackPath, self.baselinePath = destination, fallback, fallback .. '.base'
+    self.lastCapturedTick = nil
+end
+
 function Undo:loadUndo(filename)
     local ok, err = utils.bufCall(self.bufnr, function()
         return pcall(cmd, 'sil rundo ' .. fn.fnameescape(filename or self.undoPath))
@@ -310,7 +340,8 @@ function Undo:saveBaseline(snapshot)
     local ok, err = pcall(function()
         local record = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
         local previous = selected and record and record.baseline_format == 'buffer-lines-v1' and self:readBaseline()
-        if previous and table.concat(previous, '\n') .. '\n' == contents
+        if previous and record and table.concat(previous, '\n') .. '\n' == contents
+            and record.undo.path == path.normalize(self.undoPath)
             and transfer.expectedGeneration
             and storage.token(self.fallbackPath) == transfer.expectedGeneration
             and not self.lastError and not (snapshot and snapshot.lastError) then
@@ -387,10 +418,12 @@ function Undo:queueBaseline()
         if not self.attached or self.pendingTransfer ~= snapshot then return end
         -- BufReadPost handlers and modelines run after attachment. Honor their
         -- final buffer options before publishing the deferred opening snapshot.
-        if not self:canPersist() then
+        if not self:canPersist() or fn.undofile(self.name) == '' then
             self.pendingTransfer = nil
             return
         end
+        self:refreshUndoPath()
+        snapshot = self.pendingTransfer
         local dirty = self.isDirty
         local ok, err = pcall(Undo.completePendingTransferSync, snapshot)
         if ok then
@@ -827,8 +860,8 @@ function Undo:loadFallBack(transfer)
 end
 
 function Undo:shouldTransfer()
-    if not self.attached or self.undoPath == '' then
-        return logTransferDecision(self, false, self.attached and 'empty-undo-path' or 'not-attached')
+    if not self.attached then
+        return logTransferDecision(self, false, 'not-attached')
     end
     if not (vim.in_fast_event and vim.in_fast_event()) and not self:canPersist() then
         -- An opening snapshot that has never been published must not become a
@@ -836,6 +869,11 @@ function Undo:shouldTransfer()
         local pending = self.pendingTransfer
         if pending and pending.baselineOnly and not pending.lastError then self.pendingTransfer = nil end
         return logTransferDecision(self, false, 'buffer-ineligible')
+    end
+    if not vim.in_fast_event() then
+        local destination = fn.undofile(self.name)
+        if destination == '' then return logTransferDecision(self, false, 'empty-undo-path') end
+        if destination ~= self.undoPath then return logTransferDecision(self, true, 'undo-path-changed') end
     end
     if self.lastError or self.pendingTransfer then
         return logTransferDecision(self, true, 'retry')
@@ -906,10 +944,12 @@ function Undo:transferSync()
             error(self.lastError and self.lastError.message or 'pending history could not be recovered', 0)
         end
     end
+    self:refreshUndoPath()
     if self:isEmpty() then
         local snapshot = self.pendingTransfer
         local _, err = self:saveBaseline(snapshot and snapshot.baselineOnly and snapshot or nil)
         if err then error(err, 0) end
+        self.resolvedTransfers = snapshot and snapshot.supersededTransfers
         self.pendingTransfer = nil
         self.isDirty = false
         require('fundo.checkpoint').cancel(self)
@@ -924,6 +964,7 @@ function Undo:transferSync()
     end
     self.lastError = nil
     if self.pendingTransfer then
+        transfer.supersededTransfers = self.pendingTransfer.supersededTransfers
         transfer.supersededJournals = vim.list_extend({}, self.pendingTransfer.supersededJournals or {})
         if self.pendingTransfer.journalPath then
             table.insert(transfer.supersededJournals, self.pendingTransfer.journalPath)
@@ -937,6 +978,7 @@ end
 function Undo:finishTransfer(transfer)
     if self.pendingTransfer ~= transfer then return end
     self.pendingTransfer = nil
+    self.resolvedTransfers = transfer.supersededTransfers
     self.generation = transfer.generation or self.generation
     self.lastCapturedTick = transfer.changedtick or self.lastCapturedTick
     -- Retrying an older snapshot does not resolve a newer capture failure.
