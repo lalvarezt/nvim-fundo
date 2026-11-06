@@ -14,6 +14,53 @@ describe('edit checkpoints.', function()
             archives_dir = dir .. '/archives', checkpoint = checkpoint or {enabled = true}, body = body}).lines
     end
 
+    for _, case in ipairs({
+        {name = 'a continuous insert', keys = ' second', expected = 'original'},
+        {name = 'an explicit insert undo break', keys = '<C-g>u second', expected = 'first'},
+        {name = 'a separate insert', keys = '<Esc>A second', expected = 'first'},
+    }) do
+        it('preserves undo grouping for ' .. case.name .. ' across checkpoints.', function()
+            local result = run(([=[
+                vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+                local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+                local function eventually(condition, action)
+                    local start = vim.loop.hrtime()
+                    local function check()
+                        local ok, err = xpcall(function()
+                            if condition() then action(); return end
+                            assert(vim.loop.hrtime() - start < 3e9, 'input/checkpoint timed out: ' .. BufferText())
+                            vim.defer_fn(check, 10)
+                        end, debug.traceback)
+                        if not ok then io.stderr:write(err); os.exit(1) end
+                    end
+                    vim.schedule(check)
+                end
+                local function captured(text)
+                    return BufferText() == text and u.lastCapturedTick == vim.b.changedtick
+                end
+                vim.schedule(function() vim.api.nvim_input('gg0Cfirst') end)
+                eventually(function() return captured('first') end, function()
+                    assert(vim.api.nvim_get_mode().mode == 'i')
+                    vim.api.nvim_input(%q)
+                    eventually(function() return captured('first second') end, function()
+                        assert(vim.api.nvim_get_mode().mode == 'i')
+                        local beforeUndo = vim.b.changedtick
+                        vim.api.nvim_input('<Esc>u')
+                        eventually(function()
+                            return vim.api.nvim_get_mode().mode == 'n' and vim.b.changedtick > beforeUndo
+                        end, function()
+                            local undone = BufferText()
+                            vim.cmd('redo')
+                            WriteReport({undone, BufferText(), vim.fn.readfile(FILE)[1]})
+                            vim.cmd('quitall!')
+                        end)
+                    end)
+                end)
+            ]=]):format(case.keys), {enabled = true, debounce_ms = 30, max_delay_ms = 100})
+            assert.same({case.expected, 'first second', 'original'}, result)
+        end)
+    end
+
     it('skips unchanged unsaved work on repeated explicit syncs and saves the next edit.', function()
         local result = run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))

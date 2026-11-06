@@ -122,3 +122,20 @@ case checks that a checkpoint taken after undo preserves the redo branch.
 Successful checkpoint tests wait for the captured change tick instead of a
 fixed delay. A write-count regression checks that repeated `FundoSync` calls
 perform no writes for an unchanged unsaved buffer and still save its next edit.
+
+Interactive terminal validation on Neovim 0.12.6 found that `:wundo` split an
+active insert into separate undo blocks at each checkpoint. Capture now restores
+an open undo block after writing the snapshot. Input-driven regressions verify
+continuous typing, explicit Ctrl-G U breaks, and separate insert sessions.
+
+The terminal pass also checked dot-repeat, external reloads in two scrolled
+splits, undo and redo after restart, and read-only recovery previews at 140 by 36
+and 80 by 24 columns and rows. An injected archive outage displayed a warning,
+retained a recovery journal, and cleared after `FundoSync` retried successfully.
+`FundoStatus`, `FundoDoctor`, and multiline warnings use Neovim's message area
+and may require Enter to dismiss.
+
+A sustained typing check on a 100,000-line file preserved all input, Insert
+mode, and undo grouping. A main-loop heartbeat observed a maximum gap of about
+171 ms during this run. Large synchronous captures can still interrupt UI
+responsiveness. This was a local observation, not a latency guarantee.
