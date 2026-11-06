@@ -98,3 +98,12 @@ edits, sustained changes, hidden buffers, failed publications, timer disposal,
 and process exit without lifecycle events. Existing child-session tests disable
 checkpoints by default so manual and lifecycle failure injection stays isolated;
 checkpoint tests opt in explicitly, including a test using the default timings.
+The checkpoint tests also cover edits made before the deferred opening baseline
+is saved. A child process exits without lifecycle saves, and the next process
+recovers those edits through undo.
+
+Journal tests inject a directory synchronization failure after journal deletion
+and verify that the same transfer can complete on retry. Storage tests count
+directory entries visited during publication with unrelated interrupted captures
+present. Preservation mode retires obsolete committed generations without
+enumerating those captures.

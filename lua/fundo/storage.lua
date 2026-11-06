@@ -283,9 +283,19 @@ end
 
 local function cleanup(fallbackPath, current, previous, oldHead)
     local dir = M.directory(fallbackPath)
-    for _, item in ipairs(entries(dir)) do
+    local deleting = require('fundo.config').prune_policy == 'delete'
+    local candidates = {}
+    if deleting then
+        candidates = entries(dir)
+    elseif oldHead then
+        -- Preservation can only retire the former committed pair. Avoid
+        -- enumerating every retained or interrupted capture on each edit.
+        candidates[1] = {name = oldHead.current}
+        if oldHead.previous then candidates[2] = {name = oldHead.previous} end
+    end
+    for _, item in ipairs(candidates) do
         if item.name ~= 'current' and item.name ~= current and item.name ~= previous then
-            local disposable = require('fundo.config').prune_policy == 'delete'
+            local disposable = deleting
             if not disposable and oldHead and (item.name == oldHead.current or item.name == oldHead.previous)
                 and not fs.statSync(path.join(dir, item.name, 'retained')) then
                 -- Only retire a known, complete committed generation. Keep

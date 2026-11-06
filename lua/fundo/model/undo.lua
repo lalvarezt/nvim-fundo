@@ -924,7 +924,11 @@ function Undo:finishTransfer(transfer)
     self.lastUpdated = os.time()
     self.lastDurableAt = transfer.durableAt or os.time()
     if not transfer.baselineOnly then self.checkedNative = true end
-    require('fundo.checkpoint').cancel(self)
+    -- A deferred baseline or detached retry may predate a scheduled edit.
+    if not api.nvim_buf_is_loaded(self.bufnr)
+        or api.nvim_buf_get_changedtick(self.bufnr) == self.lastCapturedTick then
+        require('fundo.checkpoint').cancel(self)
+    end
     if self.captureFailure and self.captureFailure.contents == transfer.contents then
         journal.finish(self.captureFailure)
         self.resolvedCapture = self.captureFailure

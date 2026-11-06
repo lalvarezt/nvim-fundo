@@ -63,11 +63,18 @@ end
 function M.finish(transfer)
     local directories = vim.list_extend({}, transfer.supersededJournals or {})
     if transfer.journalPath then directories[#directories + 1] = transfer.journalPath end
+    -- A failed cleanup can leave already removed directories. Keep them for
+    -- synchronization retries, but let the next transfer write a new journal.
+    transfer.supersededJournals = directories
+    transfer.journalPath = nil
     for _, directory in ipairs(directories) do
-        assert(fn.delete(directory, 'rf') == 0, 'cannot remove committed recovery journal: ' .. directory)
+        if fn.delete(directory, 'rf') ~= 0 then
+            local _, err, code = fs.lstatSync(directory)
+            assert(code == 'ENOENT', err or ('cannot remove committed recovery journal: ' .. directory))
+        end
         fs.syncDirectorySync(path.dirname(directory))
     end
-    transfer.journalPath = nil
+    transfer.supersededJournals = nil
 end
 
 function M.list(archivesDir, includeLive)
