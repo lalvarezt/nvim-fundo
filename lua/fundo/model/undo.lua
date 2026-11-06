@@ -213,9 +213,15 @@ function Undo:saveUndo(target)
         log.debug('saveUndo skipped; empty undo path:', self.bufnr, self.name or '')
         return false
     end
-    local ok, cmdOk, cmdErr = pcall(utils.bufCall, self.bufnr, function()
-        return pcall(cmd, 'sil wundo! ' .. fn.fnameescape(target or self.undoPath))
-    end)
+    local function capture()
+        local synced = fn.undotree().synced
+        local saved, err = pcall(cmd, 'sil wundo! ' .. fn.fnameescape(target or self.undoPath))
+        -- :wundo closes the current undo block. A checkpoint must not split
+        -- ongoing typing, but must preserve breaks the user already made.
+        if synced == 0 then cmd('undojoin') end
+        return saved, err
+    end
+    local ok, cmdOk, cmdErr = pcall(utils.bufCall, self.bufnr, capture)
     if not ok then
         log.debug('saveUndo failed:', self.undoPath, cmdOk)
         return false, cmdOk
