@@ -35,6 +35,31 @@ describe('recovery journal integrity.', function()
         assert.truthy(fs.statSync(transfer.journalPath .. '/contents'))
     end)
 
+    it('retries a transfer after journal deletion succeeds but directory synchronization fails.', function()
+        transfer.baselinePath = transfer.fallbackPath .. '.base'
+        local Undo = require('fundo.model.undo')
+        local directory
+        local sync = fs.syncDirectorySync
+        ---@diagnostic disable-next-line: duplicate-set-field
+        fs.syncDirectorySync = function(target)
+            directory = transfer.journalPath or directory
+            if target == root and directory and not fs.statSync(directory) then
+                error('journal cleanup sync failure')
+            end
+            return sync(target)
+        end
+        local ok, err = pcall(Undo.completePendingTransferSync, transfer)
+        fs.syncDirectorySync = sync
+        assert.False(ok)
+        assert.truthy(tostring(err):find('journal cleanup sync failure', 1, true))
+        assert.is_nil(fs.statSync(directory))
+        Undo.completePendingTransferSync(transfer)
+        assert.is_nil(transfer.journalPath)
+        assert.is_nil(transfer.supersededJournals)
+        assert.equal(0, #journal.list(dir .. '/archives', true))
+        assert.equal(transfer.contents, require('fundo.storage').read(transfer.fallbackPath).contents)
+    end)
+
     it('reports malformed metadata without returning an unsafe recovery record.', function()
         journal.write(transfer)
         local filename = transfer.journalPath .. '/record'

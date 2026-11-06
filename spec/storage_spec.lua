@@ -49,6 +49,31 @@ describe('generation storage.', function()
         assert.equal(newer.generation, storage.read(fallback).generation)
     end)
 
+    it('bounds publication scans independently of unrelated preserved captures.', function()
+        local first = publish('first')
+        local second = publish('second', first.generation)
+        local directory = storage.directory(fallback)
+        for i = 1, 100 do
+            fn.mkdir(directory .. '/1-' .. i, 'p')
+            fn.writefile({'interrupted capture'}, directory .. '/1-' .. i .. '/contents')
+        end
+        local nextEntry, visits = vim.loop.fs_scandir_next, 0
+        vim.loop.fs_scandir_next = function(...)
+            local name, kind = nextEntry(...)
+            if name then visits = visits + 1 end
+            return name, kind
+        end
+        local ok, result = pcall(publish, 'third', second.generation)
+        vim.loop.fs_scandir_next = nextEntry
+        assert(ok, tostring(result))
+        assert(visits < 10, 'publication enumerated ' .. visits .. ' entries')
+        assert.equal(0, fn.isdirectory(directory .. '/' .. first.generation))
+        assert.equal('third\n', storage.read(fallback).contents)
+        for i = 1, 100 do
+            assert.same({'interrupted capture'}, fn.readfile(directory .. '/1-' .. i .. '/contents'))
+        end
+    end)
+
     it('retries a read when publications retire the selected generations.', function()
         local first = publish('first')
         local second = publish('second', first.generation)

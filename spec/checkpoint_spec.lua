@@ -55,6 +55,26 @@ describe('edit checkpoints.', function()
         assert.same({'true', 'true', 'original'}, result)
     end)
 
+    it('checkpoints edits made before the deferred opening baseline is saved.', function()
+        run([[
+            vim.o.swapfile = false
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+            assert(u.pendingTransfer and u.pendingTransfer.baselineOnly)
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'immediate draft'})
+            vim.wait(250, function() return false end, 10)
+            os.exit(0)
+        ]], {enabled = true, debounce_ms = 30, max_delay_ms = 100})
+        local result = run([[
+            vim.o.swapfile = false
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('undo')
+            WriteReport({BufferText(), vim.fn.readfile(FILE)[1]})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'immediate draft', 'original'}, result)
+    end)
+
     it('keeps failed automatic checkpoints in the recovery journal.', function()
         local result = run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
