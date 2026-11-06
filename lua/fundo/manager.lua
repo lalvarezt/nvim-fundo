@@ -52,10 +52,17 @@ local function logBufferEvent(name, bufnr)
     end
 end
 
-function Manager:finishCaptureFailure(u)
-    local failure = self.captureFailures and self.captureFailures[u.fallbackPath]
+function Manager:finishCapture(u)
+    for _, transfer in ipairs(u.resolvedTransfers or {}) do
+        if self.pendingTransfers[transfer.fallbackPath] == transfer then
+            self.pendingTransfers[transfer.fallbackPath] = nil
+        end
+    end
+    u.resolvedTransfers = nil
+    local key = u.resolvedCapture and u.resolvedCapture.fallbackPath or u.fallbackPath
+    local failure = self.captureFailures and self.captureFailures[key]
     if failure and failure == u.resolvedCapture then
-        self.captureFailures[u.fallbackPath] = nil
+        self.captureFailures[key] = nil
     end
 end
 
@@ -79,7 +86,7 @@ function Manager:detach(bufnr)
             return false, err
         end
         self.pendingTransfers[u.fallbackPath] = nil
-        self:finishCaptureFailure(u)
+        self:finishCapture(u)
         u:dispose()
         self.undos[bufnr] = nil
         log.debug('detached buffer:', bufnr)
@@ -147,7 +154,7 @@ function Manager:attach(bufnr, trigger)
             self.undos[bufnr] = u
             require('fundo.checkpoint').watch(u, function(ok)
                 if ok then
-                    self:finishCaptureFailure(u)
+                    self:finishCapture(u)
                     self.pendingTransfers[u.fallbackPath] = nil
                 elseif u.captureFailure then
                     self.captureFailures[u.fallbackPath] = u.captureFailure
@@ -341,28 +348,29 @@ function Manager:syncAll(block)
     return self.mutex:use(function()
         return async(function()
             local tasks = {}
+            local activePaths = {}
             local considered = 0
             for bufnr, u in pairs(self.undos) do
                 considered = considered + 1
                 if u:shouldTransfer() then
                     local fallbackPath = u.fallbackPath
                     local pending = self.pendingTransfers[fallbackPath]
+                    activePaths[fallbackPath] = true
                     tasks[bufnr] = u:transfer():thenCall(function(value)
-                        self:finishCaptureFailure(u)
+                        self:finishCapture(u)
                         if self.pendingTransfers[fallbackPath] == pending then
                             self.pendingTransfers[fallbackPath] = nil
                         end
                         return value
                     end)
+                    -- A changed undodir can move the active capture to a new
+                    -- archive key. Its old retry still belongs to this task.
+                    activePaths[u.fallbackPath] = true
                 end
             end
             for key, transfer in pairs(self.pendingTransfers) do
-                local active = false
-                for bufnr, u in pairs(self.undos) do
-                    if tasks[bufnr] and u.fallbackPath == key then active = true end
-                end
                 local pendingKey = key
-                if not active then
+                if not activePaths[key] then
                     tasks['pending:' .. pendingKey] = undo.completePendingTransfer(transfer):thenCall(function(value)
                         if self.pendingTransfers[pendingKey] == transfer then
                             self.pendingTransfers[pendingKey] = nil
@@ -423,7 +431,7 @@ function Manager:syncAllSync()
             if u:shouldTransfer() then
                 u:transferSync()
                 self.pendingTransfers[u.fallbackPath] = nil
-                self:finishCaptureFailure(u)
+                self:finishCapture(u)
             end
         end)
         if not ok then
