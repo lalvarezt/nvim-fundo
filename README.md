@@ -1,3 +1,17 @@
+## Personal fork disclaimer
+
+> [!WARNING]
+> **This is a personal project, provided as-is.**
+>
+> I maintain this fork for my own use. Expect rough edges and changes driven by
+> my needs, with no guarantees of stability, maintenance, or support.
+>
+> Most of the changes in this fork were developed with AI assistance.
+
+This fork builds on [nvim-fundo](https://github.com/kevinhwang91/nvim-fundo) by
+[kevinhwang91](https://github.com/kevinhwang91) and the
+[nvim-fundo contributors](https://github.com/kevinhwang91/nvim-fundo/graphs/contributors).
+
 # nvim-fundo
 
 The goal of nvim-fundo is to make Neovim's undo file become stable and useful.
