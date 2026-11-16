@@ -8,15 +8,18 @@ are outside this review.
 - Initial head: `a0f531f`.
 - Diff command: `git diff c2b83cb19e4ac475f2b08aaf775afe3da19bc495`.
 - Reviewer: Codex provider, `gpt-6.1-sol`, high reasoning effort.
-- Budget: three rounds. Round 1 returned `CHANGES`; round 2 is pending.
+- Verdict: `APPROVE` after two of three allowed rounds.
+- Round 1 returned `CHANGES`; round 2 resolved S1 with no new findings.
 - Usage: not exposed. No push requested or performed.
 - Initial diff: 61 files, 11,958 insertions, 168 deletions.
+- Final diff: 62 files, 12,019 insertions, 168 deletions, including this record.
 - Fix diff against the initial head, excluding this record: two files,
   26 insertions, one deletion.
+- Fix commit: `022a2ce`. Commits are unsigned because the signing agent was unavailable.
 
 | ID | Severity | Outcome | Evidence |
 | --- | --- | --- | --- |
-| S1 | should | Fixed, awaiting recheck | Matching baseline-only recovery now succeeds. The empty-tree sync removes the journal after publication. |
+| S1 | should | Fixed and resolved in round 2 | Matching baseline-only recovery now succeeds. The empty-tree sync removes the journal after publication. |
 
 The restart regression first failed with
 `pending snapshot still requires recovery into its buffer`. After the recovery
@@ -29,4 +32,5 @@ Validation on Neovim 0.12.6:
 - Initial `make test`: 340 successes, no failures or errors.
 - After S1, `make test`: 341 successes, no failures or errors.
 - `make lint`: no problems found before or after the fix.
+- Round 2: journal session tests passed with four successes. `git diff --check` passed.
 - Declined findings: none.
