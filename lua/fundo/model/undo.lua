@@ -655,7 +655,7 @@ function Undo:loadBaseline(transfer)
     local currentLines = api.nvim_buf_get_lines(self.bufnr, 0, -1, false)
     if self:linesEqual(baselineLines, currentLines) then
         log.trace('loadBaseline skipped; baseline equals current buffer:', self.baselinePath)
-        return false
+        return transfer ~= nil
     end
 
     local preferredWinid = utils.getWinByBuf(self.bufnr)
@@ -949,6 +949,7 @@ function Undo:transferSync()
         local snapshot = self.pendingTransfer
         local _, err = self:saveBaseline(snapshot and snapshot.baselineOnly and snapshot or nil)
         if err then error(err, 0) end
+        if snapshot and snapshot.baselineOnly then journal.finish(snapshot) end
         self.resolvedTransfers = snapshot and snapshot.supersededTransfers
         self.pendingTransfer = nil
         self.isDirty = false

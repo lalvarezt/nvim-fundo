@@ -43,6 +43,30 @@ describe('durable pending recovery.', function()
         assert.same({'saved', 'unsaved work'}, second)
     end)
 
+    it('publishes an unchanged pending baseline after an archive outage and editor exit.', function()
+        local first = run([[
+            require('fundo.storage').publish = function() error('baseline archive outage') end
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local ok = require('fundo.manager'):syncAllSync()
+            local records = require('fundo.journal').list(require('fundo.config').archives_dir, true)
+            WriteReport({tostring(ok), tostring(#records), tostring(records[1].baselineOnly)})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'false', '1', 'true'}, first)
+        local second = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local manager = require('fundo.manager')
+            local u = manager:get(vim.api.nvim_get_current_buf())
+            assert(manager:syncAllSync())
+            local record = assert(require('fundo.storage').read(u.fallbackPath))
+            local records = require('fundo.journal').list(require('fundo.config').archives_dir, true)
+            WriteReport({BufferText(), tostring(EntryCount()), tostring(vim.bo.modified),
+                tostring(u.pendingRecovery == nil), tostring(record.baselineOnly), tostring(#records)})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'original', '0', 'false', 'true', 'true', '0'}, second)
+    end)
+
     it('retains text and diagnostics when undo capture fails during unload.', function()
         local first = run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
