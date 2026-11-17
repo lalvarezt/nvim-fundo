@@ -94,3 +94,17 @@ Three cases failed at `8e5ca9c` with the updated specs. After the round 4 fixes,
 Before this final record, `git diff --shortstat` against the base reported
 62 files with 12,490 insertions and 169 deletions. At the start it reported
 62 files with 12,019 insertions and 168 deletions.
+
+### Follow-up fixes
+
+- S11. Fundo journals the active draft before retaining the detached draft.
+  The exit regression blocks archive writes while keeping the journal writable.
+  A fresh Neovim process reads both drafts and their undo data from the journal.
+- S5. The first-display recovery path requires the window that read the buffer.
+  Displaying a buffer after an aborted `bufload()` now waits for the modeline
+  check. The regression uses `eventignore=User` and verifies the undo tree stays
+  empty.
+
+Both regressions failed at `3710089`. The follow-up passed 354 tests in
+standard and shuffled order with seed `48271`. `make lint` and
+`git diff --check` passed.

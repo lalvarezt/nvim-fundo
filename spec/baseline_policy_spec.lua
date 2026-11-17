@@ -108,23 +108,32 @@ describe('baseline metadata policy.', function()
             vim.cmd('quitall!')
         ]])
         assert.same({'false', 'external|vim: set noundofile:'}, lines)
-        lines = run([[
-            vim.o.modeline = true
-            vim.o.eventignore = 'User'
-            vim.fn.writefile({'invalid native undo'}, vim.fn.undofile(FILE))
-            local ok, err = pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(FILE))
-            assert(not ok and err:find('E823', 1, true))
-            local bufnr, undofile = vim.api.nvim_get_current_buf(), vim.bo.undofile
-            vim.cmd('enew')
-            vim.cmd.buffer(bufnr)
-            local drained = false
-            vim.schedule(function() drained = true end)
-            assert(vim.wait(1000, function() return drained end))
-            vim.cmd('undo')
-            WriteReport({tostring(undofile), BufferText()})
-            vim.cmd('quitall!')
-        ]])
-        assert.same({'true', 'external|vim: set noundofile:'}, lines)
+        for _, hidden in ipairs({false, true}) do
+            lines = run(([=[
+                vim.o.modeline = true
+                vim.o.eventignore = 'User'
+                vim.fn.writefile({'invalid native undo'}, vim.fn.undofile(FILE))
+                local ok, err, bufnr
+                if %s then
+                    bufnr = vim.fn.bufadd(FILE)
+                    ok, err = pcall(vim.fn.bufload, bufnr)
+                else
+                    ok, err = pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(FILE))
+                    bufnr = vim.api.nvim_get_current_buf()
+                    vim.cmd('enew')
+                end
+                assert(not ok and err:find('E823', 1, true))
+                vim.cmd.buffer(bufnr)
+                local drained = false
+                vim.schedule(function() drained = true end)
+                assert(vim.wait(1000, function() return drained end))
+                assert(EntryCount() == 0)
+                vim.cmd('undo')
+                WriteReport({BufferText()})
+                vim.cmd('quitall!')
+            ]=]):format(tostring(hidden)))
+            assert.same({'external|vim: set noundofile:'}, lines)
+        end
     end)
 
     it('removes metadata when setup disables a baseline-only record.', function()

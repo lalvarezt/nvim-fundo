@@ -991,26 +991,17 @@ function Undo:transferSync()
         return
     end
     local pending = self.pendingRecovery
-    if pending then
-        if pending.recoverOnOpen and (vim.bo[self.bufnr].modified
-            or self.pendingNativeSequence ~= utils.bufCall(self.bufnr, fn.undotree).seq_last) then
-            -- Preserve the detached draft before publishing the user's newer work.
-            pending.retainedRecovery = pending.retainedRecovery or storage.retain(pending)
-            journal.finish(pending)
-            if not self.generation then
-                self.createdGenerations = vim.list_extend(self.createdGenerations or {}, pending.createdGenerations)
-            end
-            self.pendingRecovery = nil
-            self.pendingNativeSequence = nil
-        else
-            self:check()
-            if self.pendingRecovery then
-                error(self.lastError and self.lastError.message or 'pending history could not be recovered', 0)
-            end
+    local preserveRecovery = pending and pending.recoverOnOpen and (self.recoveryCapture
+        or vim.bo[self.bufnr].modified or self.pendingNativeSequence ~= utils.bufCall(self.bufnr, fn.undotree).seq_last)
+    if not preserveRecovery then self.recoveryCapture = nil end
+    if pending and not preserveRecovery then
+        self:check()
+        if self.pendingRecovery then
+            error(self.lastError and self.lastError.message or 'pending history could not be recovered', 0)
         end
     end
     self:refreshUndoPath()
-    if self:isEmpty() then
+    if not preserveRecovery and self:isEmpty() then
         local snapshot = self.pendingTransfer
         local _, err = self:saveBaseline(snapshot and snapshot.baselineOnly and snapshot or nil)
         if err then error(err, 0) end
@@ -1022,20 +1013,47 @@ function Undo:transferSync()
         return true
     end
     log.debug('transferSync started:', self.bufnr, self.name or '')
-    self.captureAttempt = nil
-    local captured, transfer = pcall(self.transferSnapshot, self)
-    if not captured then
-        self:recordCaptureFailure(transfer)
-        error(transfer, 0)
-    end
-    self.lastError = nil
-    if self.pendingTransfer then
-        transfer.supersededTransfers = self.pendingTransfer.supersededTransfers
-        transfer.supersededJournals = vim.list_extend({}, self.pendingTransfer.supersededJournals or {})
-        if self.pendingTransfer.journalPath then
-            table.insert(transfer.supersededJournals, self.pendingTransfer.journalPath)
+    local transfer = self.recoveryCapture
+    if not transfer or transfer.changedtick ~= api.nvim_buf_get_changedtick(self.bufnr)
+        or transfer.undoPath ~= self.undoPath then
+        local previous = transfer or self.pendingTransfer
+        self.captureAttempt = nil
+        local captured
+        captured, transfer = pcall(self.transferSnapshot, self)
+        if not captured then
+            self:recordCaptureFailure(transfer)
+            error(transfer, 0)
+        end
+        if previous and previous == self.recoveryCapture and previous.undoPath == transfer.undoPath
+            and previous.contents == transfer.contents and previous.undoContents == transfer.undoContents then
+            -- Unloading can change the tick while leaving the snapshot intact.
+            previous.changedtick = transfer.changedtick
+            transfer = previous
+        elseif previous then
+            transfer.supersededTransfers = previous.supersededTransfers
+            transfer.supersededJournals = vim.list_extend({}, previous.supersededJournals or {})
+            if previous.journalPath then
+                table.insert(transfer.supersededJournals, previous.journalPath)
+            end
         end
     end
+    if preserveRecovery then
+        -- Both drafts need a durable copy while archive writes are unavailable.
+        self.recoveryCapture = transfer
+        journal.write(transfer)
+        if not pending.retainedRecovery then
+            journal.write(pending)
+            pending.retainedRecovery = storage.retain(pending)
+        end
+        journal.finish(pending)
+        if not transfer.expectedGeneration and transfer.fallbackPath == pending.fallbackPath then
+            transfer.createdGenerations = vim.list_extend(transfer.createdGenerations or {}, pending.createdGenerations)
+        end
+        self.recoveryCapture = nil
+        self.pendingRecovery = nil
+        self.pendingNativeSequence = nil
+    end
+    self.lastError = nil
     self.pendingTransfer = transfer
     Undo.completePendingTransferSync(transfer)
     self:finishTransfer(transfer)
@@ -1078,6 +1096,7 @@ function Undo:check()
         return
     end
     if self.pendingRecovery then
+        if self.recoveryCapture then return end
         if not self:isEmpty() then
             if not self.pendingRecovery.fromJournal
                 and self.pendingNativeSequence ~= utils.bufCall(self.bufnr, fn.undotree).seq_last then

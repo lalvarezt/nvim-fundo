@@ -113,6 +113,7 @@ describe('undo directory changes.', function()
                     if stalled then
                         assert(manager:get(api.nvim_get_current_buf()).pendingRecovery)
                         api.nvim_buf_set_lines(0, 0, -1, false, {'second draft'})
+                        assert(not manager:syncAllSync())
                         fs.writeFileSync = write
                     end
                     assert(manager:syncAllSync())
@@ -132,6 +133,46 @@ describe('undo directory changes.', function()
             assert.same({scenario == 'reopen' and 'draft' or 'second draft', 'true', 'true'}, result.lines)
         end)
     end
+
+    it('journals both drafts through exit while only the archive is unavailable.', function()
+        local opts = {tmpdir = dir, file = dir .. '/source.txt', undo_dir = dir .. '/undo', archives_dir = dir .. '/archives'}
+        opts.body = [[
+            local api, fn = vim.api, vim.fn
+            local manager, fs = require('fundo.manager'), require('fundo.fs')
+            vim.cmd('edit ' .. fn.fnameescape(FILE))
+            api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+            vim.cmd('write')
+            assert(manager:syncAllSync())
+            api.nvim_buf_set_lines(0, 0, -1, false, {'first draft'})
+            local write = fs.writeFileSync
+            local archivePrefix = manager.archivesDir .. require('fundo.fs.path').sep
+            fs.writeFileSync = function(target, ...)
+                if vim.startswith(target, archivePrefix) then error('archive unavailable') end
+                return write(target, ...)
+            end
+            assert(not manager:syncAllSync())
+            vim.bo.undofile = false
+            vim.cmd('bwipeout!')
+            vim.cmd('edit ' .. fn.fnameescape(FILE))
+            assert(manager:get(api.nvim_get_current_buf()).pendingRecovery)
+            api.nvim_buf_set_lines(0, 0, -1, false, {'second draft'})
+            assert(not manager:syncAllSync())
+            vim.cmd('quitall!')
+        ]]
+        session.run(opts)
+        opts.body = [[
+            local records = require('fundo.journal').list(require('fundo.manager').archivesDir)
+            local recovered = {}
+            for _, record in ipairs(records) do
+                assert(record.undoContents)
+                recovered[#recovered + 1] = (record.contents:gsub('\n$', ''))
+            end
+            table.sort(recovered)
+            WriteReport(recovered)
+            vim.cmd('quitall!')
+        ]]
+        assert.same({'first draft', 'second draft'}, session.run(opts).lines)
+    end)
 
     for _, adjacent in ipairs({false, true}) do
         for _, deferred in ipairs({false, true}) do

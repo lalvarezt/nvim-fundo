@@ -552,7 +552,7 @@ function Manager:initialize()
     end
     event:on('BufReadPost', function(bufnr)
         logBufferEvent('BufReadPost', bufnr)
-        local read = {}
+        local read = {winid = api.nvim_get_current_win()}
         reads[bufnr] = read
         local u = self:attach(bufnr)
         if u then u:discardForeignNative() end
@@ -585,12 +585,14 @@ function Manager:initialize()
     end, self.disposables)
     event:on('BufLeave', function(bufnr)
         local read = reads[bufnr]
-        if type(read) == 'table' then read.left = true end
+        if type(read) == 'table' then read.defer = true end
     end, self.disposables)
     event:on('BufWinEnter', function(bufnr)
-        -- BufReadPost and BufNewFile run before modelines are applied.
+        -- Display in a different window can follow an aborted hidden read.
         local read = reads[bufnr]
-        if read == 'new' or (read and not read.left) then afterRead(bufnr, read ~= 'new') end
+        if read == 'new' or (read and not read.defer and read.winid == api.nvim_get_current_win()) then
+            afterRead(bufnr, read ~= 'new')
+        end
     end, self.disposables)
     event:on('FileChangedShellPost', function(bufnr)
         logBufferEvent('FileChangedShellPost', bufnr)
