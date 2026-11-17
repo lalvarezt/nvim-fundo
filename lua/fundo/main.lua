@@ -16,7 +16,7 @@ local function createEvents()
     local groupId = api.nvim_create_augroup('Fundo', {})
     log.debug('created autocmd group:', groupId)
     api.nvim_create_autocmd({
-        'BufReadPost', 'BufNewFile', 'BufWinEnter', 'BufFilePost', 'BufWritePost', 'BufWipeout', 'BufUnload',
+        'BufReadPost', 'BufNewFile', 'BufLeave', 'BufWinEnter', 'BufFilePost', 'BufWritePost', 'BufWipeout', 'BufUnload',
         'FileChangedShellPost',
     }, {
         group = groupId,

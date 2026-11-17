@@ -41,22 +41,23 @@ Review started at `327e3e9` on `experiments`. The base is
 `c2b83cb19e4ac475f2b08aaf775afe3da19bc495`. The diff covers undo preservation,
 checkpoints, storage failures, recovery, and buffer persistence options.
 
-Codex ran `gpt-6.2-sol` with high reasoning effort. Rounds 1 through 3 returned
+Codex ran `gpt-6.2-sol` with high reasoning effort. Rounds 1 through 4 returned
 `CHANGES`. The review extended past three rounds after Sol reproduced loss of
 the only pending draft in S4. The review tool did not expose token usage.
 
 | ID | Severity | Outcome | Evidence |
 | --- | --- | --- | --- |
 | S1 | blocker | Resolved in round 2 | A scratch buffer verifies the undo file against the archived text before recovery changes the source. The regression compares the native undo file before and after a failed recovery. |
-| S2 | blocker | Fixed after round 3 | Fundo checks for a foreign native tree when opening a file or enabling Fundo with a buffer already open. It enumerates manifests using the literal archive directory path. The regression uses matching text and includes `arc[2026]`. |
+| S2 | blocker | Resolved in round 4 | Fundo checks for a foreign native tree when opening a file or enabling Fundo with a buffer already open. It enumerates manifests using the literal archive directory path. The regression uses matching text and includes `arc[2026]`. |
 | S3 | should | Resolved in round 2 | Disabling baselines switches a baseline pointer to a full generation and preserves other full captures. |
-| S4 | should | Fixed after round 3 | Both sync paths hold pending transfers while persistence is off. A skipped detach keeps the pending draft. Reopening retains the original native tree before loading the pending draft. |
-| S5 | should | Fixed after round 3 | `BufWinEnter` and `FileChangedShellPost` run recovery after modelines. After an aborted read, Fundo confirms its private autocmd ran before checking recovery eligibility. |
+| S4 | should | Resolved in round 4 | Both sync paths hold pending transfers while persistence is off. A skipped detach keeps the pending draft. Reopening retains the original native tree before loading the pending draft. |
+| S5 | should | Fixed after round 4 | `BufWinEnter` and `FileChangedShellPost` run recovery after modelines. Leaving a buffer after an aborted read makes redisplay wait for the modeline check. |
 | S6 | should | Resolved in round 2 | Delete pruning keeps pointerless generation directories with captures. The test repairs a pointer after startup cleanup. |
 | S7 | nit | Deferred | Directory synchronization for a search-only ancestor is a separate filesystem change. |
 | S8 | nit | Deferred | The unreachable fast-event branches have no effect on recovery. |
 | S9 | should | Resolved in round 3 | The association probe identifies the destination source before reading its legacy baseline. |
 | S10 | should | Resolved in round 3 | Disabling baselines loads the promoted full generation on the same open. |
+| S11 | blocker | Fixed after round 4 | Editing after a stalled reopen saves a new snapshot and keeps the older pending draft in a separate recovery generation. The test covers both an existing archive and a first save. |
 
 On Neovim 0.12.6, the seven regression cases failed at `327e3e9` and passed after
 the fixes. `make test` passed 347 tests. `make lint` and `git diff --check`
@@ -73,3 +74,7 @@ fixes cover both ownership checks, reopen with a pending draft and an older
 native tree, and an aborted read with `eventignore=User`. `make test` passed
 351 tests in standard and shuffled order with seed `48271`. `make lint` and
 `git diff --check` passed.
+
+Three cases failed at `8e5ca9c` with the updated specs. After the round 4 fixes,
+`make test` passed 353 tests in standard and shuffled order with seed `48271`.
+`make lint` and `git diff --check` passed.

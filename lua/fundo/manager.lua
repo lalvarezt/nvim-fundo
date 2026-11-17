@@ -583,9 +583,14 @@ function Manager:initialize()
     event:on('BufNewFile', function(bufnr)
         reads[bufnr] = 'new'
     end, self.disposables)
+    event:on('BufLeave', function(bufnr)
+        local read = reads[bufnr]
+        if type(read) == 'table' then read.left = true end
+    end, self.disposables)
     event:on('BufWinEnter', function(bufnr)
         -- BufReadPost and BufNewFile run before modelines are applied.
-        if reads[bufnr] then afterRead(bufnr, reads[bufnr] ~= 'new') end
+        local read = reads[bufnr]
+        if read == 'new' or (read and not read.left) then afterRead(bufnr, read ~= 'new') end
     end, self.disposables)
     event:on('FileChangedShellPost', function(bufnr)
         logBufferEvent('FileChangedShellPost', bufnr)

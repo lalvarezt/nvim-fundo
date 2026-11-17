@@ -508,6 +508,10 @@ end
 
 function Undo.completePendingTransferSync(transfer)
     assert(not transfer.textOnly, 'text-only recovery copies require explicit recovery; committed undo is preserved')
+    if transfer.retainedRecovery then
+        journal.finish(transfer)
+        return
+    end
     if transfer.baselineOnly then
         local writer = setmetatable(transfer, {__index = Undo})
         local _, err = writer:saveBaseline(transfer)
@@ -986,10 +990,23 @@ function Undo:transferSync()
         log.debug('transferSync skipped:', self.bufnr, self.name or '')
         return
     end
-    if self.pendingRecovery then
-        self:check()
-        if self.pendingRecovery then
-            error(self.lastError and self.lastError.message or 'pending history could not be recovered', 0)
+    local pending = self.pendingRecovery
+    if pending then
+        if pending.recoverOnOpen and (vim.bo[self.bufnr].modified
+            or self.pendingNativeSequence ~= utils.bufCall(self.bufnr, fn.undotree).seq_last) then
+            -- Preserve the detached draft before publishing the user's newer work.
+            pending.retainedRecovery = pending.retainedRecovery or storage.retain(pending)
+            journal.finish(pending)
+            if not self.generation then
+                self.createdGenerations = vim.list_extend(self.createdGenerations or {}, pending.createdGenerations)
+            end
+            self.pendingRecovery = nil
+            self.pendingNativeSequence = nil
+        else
+            self:check()
+            if self.pendingRecovery then
+                error(self.lastError and self.lastError.message or 'pending history could not be recovered', 0)
+            end
         end
     end
     self:refreshUndoPath()

@@ -83,37 +83,55 @@ describe('undo directory changes.', function()
         end)
     end
 
-    it('recovers a detached draft over an older native tree before retrying its save.', function()
-        local result = session.run({tmpdir = dir, file = dir .. '/source.txt', undo_dir = dir .. '/undo',
-            archives_dir = dir .. '/archives', body = [[
-                local fn, api = vim.fn, vim.api
-                local manager, fs, storage = require('fundo.manager'), require('fundo.fs'), require('fundo.storage')
-                vim.cmd('edit ' .. fn.fnameescape(FILE))
-                api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
-                vim.cmd('write')
-                assert(manager:syncAllSync())
-                local fallback = manager:get(api.nvim_get_current_buf()).fallbackPath
-                api.nvim_buf_set_lines(0, 0, -1, false, {'draft'})
-                local write = fs.writeFileSync
-                fs.writeFileSync = function() error('archive unavailable') end
-                assert(not manager:syncAllSync())
-                vim.bo.undofile = false
-                vim.cmd('bwipeout!')
-                fs.writeFileSync = write
-                assert(manager.pendingTransfers[fallback] and not manager.pendingTransfers[fallback].fromJournal)
-                vim.cmd('edit ' .. fn.fnameescape(FILE))
-                assert(BufferText() == 'saved' and not vim.bo.modified)
-                assert(manager:syncAllSync())
-                local retained = false
-                for _, capture in ipairs(storage.candidates(fallback)) do
-                    if capture.retained and capture.contents == 'saved\n' then retained = true end
-                end
-                vim.cmd('undo')
-                WriteReport({BufferText(), tostring(retained), tostring(manager.pendingTransfers[fallback] == nil)})
-                vim.cmd('quitall!')
-            ]]})
-        assert.same({'draft', 'true', 'true'}, result.lines)
-    end)
+    for _, scenario in ipairs({'reopen', 'stalled recovery', 'stalled recovery before first commit'}) do
+        it('preserves detached undo on ' .. scenario .. '.', function()
+            local result = session.run({tmpdir = dir, file = dir .. '/source.txt', undo_dir = dir .. '/undo',
+                archives_dir = dir .. '/archives', body = ([=[
+                    local fn, api = vim.fn, vim.api
+                    local manager, fs, storage = require('fundo.manager'), require('fundo.fs'), require('fundo.storage')
+                    local scenario = %q
+                    local stalled = scenario ~= 'reopen'
+                    vim.cmd('edit ' .. fn.fnameescape(FILE))
+                    api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+                    vim.cmd('write')
+                    local fallback = manager:get(api.nvim_get_current_buf()).fallbackPath
+                    if scenario == 'stalled recovery before first commit' then
+                        assert(not storage.token(fallback))
+                    else
+                        assert(manager:syncAllSync())
+                    end
+                    api.nvim_buf_set_lines(0, 0, -1, false, {'draft'})
+                    local write = fs.writeFileSync
+                    fs.writeFileSync = function() error('archive unavailable') end
+                    assert(not manager:syncAllSync())
+                    vim.bo.undofile = false
+                    vim.cmd('bwipeout!')
+                    if not stalled then fs.writeFileSync = write end
+                    assert(manager.pendingTransfers[fallback] and not manager.pendingTransfers[fallback].fromJournal)
+                    vim.cmd('edit ' .. fn.fnameescape(FILE))
+                    assert(BufferText() == 'saved' and not vim.bo.modified)
+                    if stalled then
+                        assert(manager:get(api.nvim_get_current_buf()).pendingRecovery)
+                        api.nvim_buf_set_lines(0, 0, -1, false, {'second draft'})
+                        fs.writeFileSync = write
+                    end
+                    assert(manager:syncAllSync())
+                    local retained = false
+                    local expected = stalled and 'draft\n' or 'saved\n'
+                    for _, capture in ipairs(storage.candidates(fallback)) do
+                        if capture.retained and capture.contents == expected then retained = true end
+                    end
+                    if stalled then
+                        assert(storage.read(fallback).contents == 'second draft\n')
+                    else
+                        vim.cmd('undo')
+                    end
+                    WriteReport({BufferText(), tostring(retained), tostring(manager.pendingTransfers[fallback] == nil)})
+                    vim.cmd('quitall!')
+                ]=]):format(scenario)})
+            assert.same({scenario == 'reopen' and 'draft' or 'second draft', 'true', 'true'}, result.lines)
+        end)
+    end
 
     for _, adjacent in ipairs({false, true}) do
         for _, deferred in ipairs({false, true}) do

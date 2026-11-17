@@ -114,12 +114,12 @@ describe('baseline metadata policy.', function()
             vim.fn.writefile({'invalid native undo'}, vim.fn.undofile(FILE))
             local ok, err = pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(FILE))
             assert(not ok and err:find('E823', 1, true))
-            local drained = false
-            vim.schedule(function() drained = true end)
-            assert(vim.wait(1000, function() return drained end))
             local bufnr, undofile = vim.api.nvim_get_current_buf(), vim.bo.undofile
             vim.cmd('enew')
             vim.cmd.buffer(bufnr)
+            local drained = false
+            vim.schedule(function() drained = true end)
+            assert(vim.wait(1000, function() return drained end))
             vim.cmd('undo')
             WriteReport({tostring(undofile), BufferText()})
             vim.cmd('quitall!')
