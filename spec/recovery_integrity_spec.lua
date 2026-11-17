@@ -109,9 +109,11 @@ describe('recovery integrity.', function()
                 else
                     local calls = 0
                     api.nvim_buf_set_lines = function(...)
-                        calls = calls + 1
-                        if calls == 2 or (stage == 'rollback' and calls > 2 and select(1, ...) == u.bufnr) then
-                            error('injected restoration exception')
+                        if select(1, ...) == u.bufnr then
+                            calls = calls + 1
+                            if calls == 2 or (stage == 'rollback' and calls > 2) then
+                                error('injected restoration exception')
+                            end
                         end
                         return setLines(...)
                     end

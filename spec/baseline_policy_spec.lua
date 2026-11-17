@@ -79,6 +79,24 @@ describe('baseline metadata policy.', function()
         assert.same({'0'}, lines)
     end)
 
+    it('does not recover archived undo before a modeline disables it.', function()
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'archived draft'})
+            assert(require('fundo.manager'):syncAllSync())
+            vim.cmd('quitall!')
+        ]])
+        local lines = run([[
+            vim.o.modeline = true
+            vim.fn.writefile({'external', 'vim: set noundofile:'}, FILE)
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('undo')
+            WriteReport({tostring(vim.bo.undofile), BufferText()})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'false', 'external|vim: set noundofile:'}, lines)
+    end)
+
     it('removes metadata when setup disables a baseline-only record.', function()
         local lines = run([[
             local fundo = require('fundo')

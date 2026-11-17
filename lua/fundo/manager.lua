@@ -344,6 +344,12 @@ function Manager:scanArchivesDir()
     end)
 end
 
+local function canReplay(transfer)
+    local bufnr = fn.bufnr(transfer.name)
+    if bufnr < 0 or not api.nvim_buf_is_loaded(bufnr) then return true end
+    return undo:new(bufnr):canPersist() and fn.undofile(transfer.name) ~= ''
+end
+
 function Manager:syncAll(block)
     return self.mutex:use(function()
         return async(function()
@@ -356,12 +362,13 @@ function Manager:syncAll(block)
                     local fallbackPath = u.fallbackPath
                     local pending = self.pendingTransfers[fallbackPath]
                     activePaths[fallbackPath] = true
-                    tasks[bufnr] = u:transfer():thenCall(function(value)
-                        self:finishCapture(u)
-                        if self.pendingTransfers[fallbackPath] == pending then
-                            self.pendingTransfers[fallbackPath] = nil
+                    tasks[bufnr] = u:transfer():thenCall(function(saved)
+                        if saved then
+                            self:finishCapture(u)
+                            if self.pendingTransfers[fallbackPath] == pending then
+                                self.pendingTransfers[fallbackPath] = nil
+                            end
                         end
-                        return value
                     end)
                     -- A changed undodir can move the active capture to a new
                     -- archive key. Its old retry still belongs to this task.
@@ -371,11 +378,12 @@ function Manager:syncAll(block)
             for key, transfer in pairs(self.pendingTransfers) do
                 local pendingKey = key
                 if not activePaths[key] then
-                    tasks['pending:' .. pendingKey] = undo.completePendingTransfer(transfer):thenCall(function(value)
+                    tasks['pending:' .. pendingKey] = onMain(function()
+                        if self.pendingTransfers[pendingKey] ~= transfer or not canReplay(transfer) then return end
+                        undo.completePendingTransferSync(transfer)
                         if self.pendingTransfers[pendingKey] == transfer then
                             self.pendingTransfers[pendingKey] = nil
                         end
-                        return value
                     end)
                 end
             end
@@ -445,6 +453,7 @@ function Manager:syncAllSync()
         end
     end
     for key, transfer in pairs(self.pendingTransfers) do
+        if not canReplay(transfer) then goto continue end
         local recovering = false
         for _, u in pairs(self.undos) do
             if u.pendingRecovery == transfer then recovering = true end
@@ -463,6 +472,7 @@ function Manager:syncAllSync()
         else
             table.insert(failures, ('pending %s: %s'):format(key, tostring(err)))
         end
+        ::continue::
     end
     if #failures > 0 then
         pcall(log.warn, 'synchronous undo transfer failures:', table.concat(failures, '; '))
@@ -523,33 +533,41 @@ function Manager:initialize()
         self.undos = {}
         self.lastScannedtime = 0
     end))
-    event:on('BufReadPost', function(bufnr)
-        logBufferEvent('BufReadPost', bufnr)
+    local reads = {}
+    local function afterRead(bufnr, edited)
+        reads[bufnr] = nil
         local u = self:attach(bufnr)
         if u then
             u:check()
-            if not u.pendingRecovery and not vim.bo[bufnr].modified and not u:isEmpty() then
-                -- Explicit reloads can retain native undo without emitting
-                -- FileChangedShellPost. Persist the matching buffer text too.
+            if edited and not u.pendingRecovery and not vim.bo[bufnr].modified and not u:isEmpty() then
+                -- Reloads can retain native undo. Persist the matching text.
                 u:reset(true)
             end
         end
+    end
+    event:on('BufReadPost', function(bufnr)
+        logBufferEvent('BufReadPost', bufnr)
+        local read = {}
+        reads[bufnr] = read
+        self:attach(bufnr)
+        -- A failed native undo read can abort before BufWinEnter. A modeline
+        -- may not have run in that case, so only recover with modelines off.
+        vim.schedule(function()
+            if not self.initialized or not api.nvim_buf_is_loaded(bufnr) or reads[bufnr] ~= read then return end
+            if vim.bo[bufnr].modeline and vim.o.modelines > 0 then return end
+            afterRead(bufnr, true)
+        end)
+    end, self.disposables)
+    event:on('BufNewFile', function(bufnr)
+        reads[bufnr] = 'new'
+    end, self.disposables)
+    event:on('BufWinEnter', function(bufnr)
+        -- BufReadPost and BufNewFile run before modelines are applied.
+        if reads[bufnr] then afterRead(bufnr, reads[bufnr] ~= 'new') end
     end, self.disposables)
     event:on('FileChangedShellPost', function(bufnr)
         logBufferEvent('FileChangedShellPost', bufnr)
-        local u = self.undos[bufnr]
-        if u then
-            u:check()
-            if not u.pendingRecovery and not vim.bo[bufnr].modified and not u:isEmpty() then
-                -- Neovim can preserve the tree itself on reload. Its new file
-                -- contents still need a matching fallback before the next save.
-                u:reset(true)
-            end
-        end
-    end, self.disposables)
-    event:on('BufNewFile', function(bufnr)
-        local u = self:attach(bufnr)
-        if u then u:check() end
+        afterRead(bufnr, true)
     end, self.disposables)
     event:on('BufFilePost', function(bufnr)
         local u = self.undos[bufnr]
@@ -568,10 +586,12 @@ function Manager:initialize()
     end, self.disposables)
     event:on('BufWipeout', function(bufnr)
         logBufferEvent('BufWipeout', bufnr)
+        reads[bufnr] = nil
         self:detach(bufnr)
     end, self.disposables)
     event:on('BufUnload', function(bufnr)
         logBufferEvent('BufUnload', bufnr)
+        reads[bufnr] = nil
         self:detach(bufnr)
     end, self.disposables)
     event:on('CmdlineEnter', function(char)

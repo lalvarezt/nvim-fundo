@@ -135,7 +135,7 @@ local function sourceSnapshot(name)
     end
     assert(#matches == 1, 'multiple archives match the old path; association is ambiguous')
     local record = matches[1]
-    local committed, err = storage.read(record.fallbackPath)
+    local committed, err = storage.read(record.fallbackPath, name)
     if committed then return committed end
     assert(err == 'missing', err)
     return withScratch(record, function(u, bufnr)
@@ -228,7 +228,7 @@ function M.associate(oldPath, newPath)
         api.nvim_buf_set_lines(scratch, 0, -1, false, current)
         vim.bo[scratch].undolevels = vim.bo[bufnr].undolevels
         vim.bo[scratch].modified = false
-        local loaded, reason = u:loadFallBack(source)
+        local loaded, reason = u:loadFallBack(vim.tbl_extend('force', source, {name = newPath}))
         assert(loaded or (source.baselineOnly and source.contents == currentText), reason or 'source history could not be loaded')
         if u:isEmpty() then
             return {baselineOnly = true, name = newPath, undoPath = undoPath, fallbackPath = fallback,

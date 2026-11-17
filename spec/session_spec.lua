@@ -625,7 +625,11 @@ describe('closed Neovim sessions.', function()
         end
         fn.writefile({'external', 'corrupt-undo'}, file)
         local corruptUndo = map_report(run([[
+            vim.o.modeline = false
             local edit_ok, edit_err = pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(FILE))
+            local drained = false
+            vim.schedule(function() drained = true end)
+            assert(vim.wait(1000, function() return drained end))
             local out = {
                 'edit_ok=' .. tostring(edit_ok),
                 'edit_err=' .. tostring(edit_err),

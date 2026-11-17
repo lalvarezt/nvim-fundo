@@ -46,6 +46,41 @@ describe('undo directory changes.', function()
         assert.same({'draft'}, result.lines)
     end)
 
+    for _, option in ipairs({'undodir', 'undofile'}) do
+        it('keeps failed saves pending while ' .. option .. ' disables persistence.', function()
+            local result = session.run({tmpdir = dir, file = dir .. '/source.txt', undo_dir = dir .. '/undo',
+                archives_dir = dir .. '/archives', body = ([=[
+                    local api, fn = vim.api, vim.fn
+                    local manager, fs, storage = require('fundo.manager'), require('fundo.fs'), require('fundo.storage')
+                    vim.cmd('edit ' .. fn.fnameescape(FILE))
+                    api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+                    assert(manager:syncAllSync())
+                    local u = manager:get(api.nvim_get_current_buf())
+                    local revision = storage.revision(u.fallbackPath)
+                    local native = fn.readfile(u.undoPath, 'b')
+                    vim.cmd('let &l:undolevels = &l:undolevels')
+                    api.nvim_buf_set_lines(0, 0, -1, false, {'draft'})
+                    local write = fs.writeFileSync
+                    fs.writeFileSync = function() error('archive unavailable') end
+                    assert(not manager:syncAllSync())
+                    fs.writeFileSync = write
+                    local option, oldDir = %q, vim.o.undodir
+                    if option == 'undodir' then vim.o.undodir = '' else vim.bo.undofile = false end
+                    assert(manager:syncAllSync())
+                    local done, saved = false, false
+                    manager:syncAll():thenCall(function() done, saved = true, true end, function() done = true end)
+                    assert(vim.wait(1000, function() return done end) and saved)
+                    assert(manager.pendingTransfers[u.fallbackPath] and storage.revision(u.fallbackPath) == revision)
+                    assert(vim.deep_equal(native, fn.readfile(u.undoPath, 'b')))
+                    if option == 'undodir' then vim.o.undodir = oldDir else vim.bo.undofile = true end
+                    assert(manager:syncAllSync())
+                    WriteReport({(storage.read(u.fallbackPath).contents:gsub('\n$', ''))})
+                    vim.cmd('quitall!')
+                ]=]):format(option)})
+            assert.same({'draft'}, result.lines)
+        end)
+    end
+
     for _, adjacent in ipairs({false, true}) do
         for _, deferred in ipairs({false, true}) do
             it('moves a clean baseline with adjacent=' .. tostring(adjacent) .. ' and deferred=' .. tostring(deferred), function()

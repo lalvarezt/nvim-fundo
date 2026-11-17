@@ -25,6 +25,30 @@ describe('configured archive paths.', function()
         }).lines
     end
 
+    it('keeps sources whose native undo filenames collide in separate archives.', function()
+        local lines = run([[
+            local fn, api = vim.fn, vim.api
+            local root = fn.fnamemodify(FILE, ':h')
+            local percent, nested = root .. '/a%b', root .. '/a/b'
+            fn.mkdir(root .. '/a')
+            fn.writefile({'percent original'}, percent)
+            fn.writefile({'nested original'}, nested)
+            assert(fn.undofile(percent) == fn.undofile(nested))
+            local manager = require('fundo.manager')
+            vim.cmd('edit ' .. fn.fnameescape(percent))
+            api.nvim_buf_set_lines(0, 0, -1, false, {'percent draft'})
+            assert(manager:syncAllSync())
+            local first = manager:get(api.nvim_get_current_buf()).fallbackPath
+            vim.cmd('bwipeout!')
+            vim.cmd('edit ' .. fn.fnameescape(nested))
+            local second = manager:get(api.nvim_get_current_buf()).fallbackPath
+            vim.cmd('undo')
+            WriteReport({tostring(first ~= second), BufferText()})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'true', 'nested original'}, lines)
+    end)
+
     it('keeps relative archive paths fixed when the working directory changes.', function()
         local lines = run([[
             local root = vim.fn.fnamemodify(FILE, ':h')

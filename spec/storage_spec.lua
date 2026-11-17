@@ -26,6 +26,36 @@ describe('generation storage.', function()
         return value
     end
 
+    it('preserves full generations when disabling the selected baseline.', function()
+        local baseline = snapshot('baseline')
+        baseline.baselineOnly, baseline.undoContents = true, nil
+        local id = storage.publish(baseline, function() end)
+        local draft = publish('unsaved draft', id)
+        local retained = storage.retain(snapshot('other draft'))
+        storage.restorePointer(fallback, id, storage.revision(fallback))
+        local disabled = snapshot('unused', id)
+        disabled.baselineOnly, disabled.contents, disabled.undoContents = true, nil, nil
+        assert.equal(draft.generation, storage.publish(disabled, function() end))
+        assert.equal('unsaved draft\n', storage.read(fallback).contents)
+        local kept = {}
+        for _, candidate in ipairs(storage.candidates(fallback)) do kept[candidate.generation] = true end
+        assert.same({[draft.generation] = true, [retained] = true}, kept)
+    end)
+
+    it('keeps pointerless captures available for repair with delete pruning.', function()
+        local first = publish('first')
+        local second = publish('second', first.generation)
+        assert.equal(0, fn.delete(storage.directory(fallback) .. '/current'))
+        local config = require('fundo.config')
+        local old = config.prune_policy
+        config.prune_policy = 'delete'
+        local ok, err = pcall(storage.clean, dir)
+        config.prune_policy = old
+        assert(ok, err)
+        assert.equal(2, #storage.candidates(fallback))
+        assert.equal('second\n', storage.restorePointer(fallback, second.generation, false).contents)
+    end)
+
     it('keeps the last committed generation when publication is interrupted.', function()
         local first = publish('first')
         local nextSnapshot = snapshot('second', first.generation)

@@ -37,10 +37,10 @@ local function idValid(id)
     return type(id) == 'string' and id:match('^%d+%-%d+$') ~= nil
 end
 
-local function hasCaptures(fallbackPath, owned)
+local function hasCaptures(dir, owned)
     local known = {}
     for _, id in ipairs(owned or {}) do known[id] = true end
-    local scan = uv.fs_scandir(M.directory(fallbackPath))
+    local scan = uv.fs_scandir(dir)
     if scan then
         while true do
             local name, kind = uv.fs_scandir_next(scan)
@@ -63,6 +63,18 @@ end
 function M.token(fallbackPath)
     local value = head(fallbackPath)
     return value and value.current or false
+end
+
+function M.sourceName(fallbackPath)
+    local ok, name = pcall(function()
+        local pointer = head(fallbackPath)
+        if not pointer then return end
+        local record = readJson(path.join(M.directory(fallbackPath), pointer.current, 'record'))
+        if record.version == 1 and record.fallbackPath == fallbackPath and type(record.name) == 'string' then
+            return record.name
+        end
+    end)
+    if ok then return name end
 end
 
 function M.revision(fallbackPath)
@@ -104,12 +116,12 @@ local function readGeneration(fallbackPath, id)
     return result
 end
 
-function M.read(fallbackPath)
+function M.read(fallbackPath, source)
     for _ = 1, 3 do
         local ok, value = pcall(head, fallbackPath)
         if not ok then return nil, tostring(value) end
         if not value then
-            return nil, hasCaptures(fallbackPath) and 'generation pointer is missing; inspect :FundoRecover and select :FundoRepair' or 'missing'
+            return nil, hasCaptures(M.directory(fallbackPath)) and 'generation pointer is missing; inspect :FundoRecover and select :FundoRepair' or 'missing'
         end
         local loaded, result = pcall(readGeneration, fallbackPath, value.current)
         if not loaded and value.previous then
@@ -119,6 +131,9 @@ function M.read(fallbackPath)
         if not checked then return nil, tostring(latest) end
         if latest and latest.current == value.current and latest.previous == value.previous then
             if not loaded then return nil, tostring(result) end
+            if source and path.normalize(result.name) ~= path.normalize(source) then
+                return nil, 'archive source mismatch'
+            end
             result.expectedGeneration = value.current
             return result
         end
@@ -309,16 +324,17 @@ end
 
 function M.publish(transfer, persist)
     return M.withLock(transfer.fallbackPath, function()
+        local dir = M.directory(transfer.fallbackPath)
         local oldHead = head(transfer.fallbackPath)
         local current = oldHead and oldHead.current or false
         if current ~= transfer.expectedGeneration then
             error('archive changed in another session; reopen the file before retrying')
         end
-        assert(oldHead or not hasCaptures(transfer.fallbackPath, transfer.createdGenerations),
+        assert(oldHead or not hasCaptures(dir, transfer.createdGenerations),
             'generation pointer is missing; inspect :FundoRecover and select :FundoRepair before publishing')
         local saved = transfer
         local prior, priorError
-        if oldHead then prior, priorError = M.read(transfer.fallbackPath) end
+        if oldHead then prior, priorError = M.read(transfer.fallbackPath, transfer.name) end
         if priorError and priorError ~= 'missing' then error(priorError) end
         if transfer.retainPrevious and prior and not prior.baselineOnly then
             fs.writeFileSync(path.join(M.directory(transfer.fallbackPath), prior.generation, 'retained'),
@@ -332,29 +348,48 @@ function M.publish(transfer, persist)
                 if not transfer.contents then saved.baselineContents = nil end
             end
         end
-        if not saved.contents then
-            persist()
-            assert(fn.delete(M.directory(transfer.fallbackPath), 'rf') == 0, 'cannot remove disabled baseline generation')
-            transfer.generation = false
-            return false
+        local id, previous, baselines
+        if saved.contents then
+            id = writeGeneration(saved, transfer)
+            previous = prior and prior.generation
+        else
+            -- A baseline can be selected explicitly while complete undo
+            -- generations still exist. Keep them when disabling baselines.
+            baselines = {}
+            for _, candidate in ipairs(M.candidates(transfer.fallbackPath)) do
+                if path.normalize(candidate.name) == path.normalize(transfer.name) then
+                    if candidate.baselineOnly then
+                        table.insert(baselines, candidate.generation)
+                    elseif not id or not oldHead or id ~= oldHead.previous then
+                        id = candidate.generation
+                    end
+                end
+            end
         end
-        local id = writeGeneration(saved, transfer)
         persist()
-        local published, publishError = pcall(fs.writeFileSync,
-            path.join(M.directory(transfer.fallbackPath), 'current'), fn.json_encode({
-            version = 1, current = id, previous = prior and prior.generation or nil,
-        }))
-        if not published then
-            -- Rename may have succeeded before directory fsync failed. Retain
-            -- that visible revision as our retry token without reporting success.
-            local readable, token = pcall(M.token, transfer.fallbackPath)
-            if readable and token == id then transfer.expectedGeneration = id end
-            error(publishError, 0)
+        if id then
+            local published, publishError = pcall(fs.writeFileSync,
+                path.join(dir, 'current'), fn.json_encode({version = 1, current = id, previous = previous}))
+            if not published then
+                -- Rename may have succeeded before directory fsync failed. Retain
+                -- that visible revision as our retry token without reporting success.
+                local readable, token = pcall(M.token, transfer.fallbackPath)
+                if readable and token == id then transfer.expectedGeneration = id end
+                error(publishError, 0)
+            end
+        elseif oldHead then
+            local removed, err = fs.unlinkSync(path.join(dir, 'current'))
+            assert(removed, err)
         end
-        transfer.generation = id
+        transfer.generation = id or false
         transfer.createdGenerations = nil
-        cleanup(transfer.fallbackPath, id, prior and prior.generation or nil, oldHead)
-        return id
+        if saved.contents then
+            cleanup(transfer.fallbackPath, id, previous, oldHead)
+        else
+            for _, baseline in ipairs(baselines) do fn.delete(path.join(dir, baseline), 'rf') end
+            if not id and not hasCaptures(dir) then fn.delete(dir, 'rf') end
+        end
+        return transfer.generation
     end)
 end
 
@@ -429,7 +464,7 @@ function M.clean(archivesDir)
             local dir = path.join(M.root(archivesDir), item.name)
             pcall(withDirectoryLock, dir, function()
                 if not fs.statSync(path.join(dir, 'current')) then
-                    fn.delete(dir, 'rf')
+                    if not hasCaptures(dir) then fn.delete(dir, 'rf') end
                     return
                 end
                 local pointer = readJson(path.join(dir, 'current'))

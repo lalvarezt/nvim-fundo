@@ -26,10 +26,10 @@ local function queue(tracked, completed)
             if not tracked.attached or tracked.checkpointSerial ~= serial
                 or not api.nvim_buf_is_loaded(tracked.bufnr) then return end
             tracked.checkpointStarted = nil
-            local ok, err = pcall(tracked.transferSync, tracked)
-            completed(ok, err)
+            local ok, result = pcall(tracked.transferSync, tracked)
+            if not ok or result then completed(ok) end
             if not ok then
-                local message = tostring(err)
+                local message = tostring(result)
                 local notice = tracked.checkpointNotice
                 if not notice or notice.message ~= message or os.time() - notice.time >= 30 then
                     tracked.checkpointNotice = {message = message, time = os.time()}
