@@ -1062,7 +1062,8 @@ function Undo:check()
     end
     if self.pendingRecovery then
         if not self:isEmpty() then
-            if not self.pendingRecovery.fromJournal then
+            if not self.pendingRecovery.fromJournal
+                and self.pendingNativeSequence ~= utils.bufCall(self.bufnr, fn.undotree).seq_last then
                 self.lastError = transferError('undo', 'pending recovery would replace newer undo history')
                 return
             end
@@ -1077,6 +1078,7 @@ function Undo:check()
         self.pendingTransfer = self.pendingRecovery
         self.generation = self.pendingRecovery.expectedGeneration
         self.pendingRecovery = nil
+        self.pendingNativeSequence = nil
         self.checkedNative = true
         self.lastError = nil
         return

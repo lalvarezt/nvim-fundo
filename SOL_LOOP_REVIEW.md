@@ -41,21 +41,22 @@ Review started at `327e3e9` on `experiments`. The base is
 `c2b83cb19e4ac475f2b08aaf775afe3da19bc495`. The diff covers undo preservation,
 checkpoints, storage failures, recovery, and buffer persistence options.
 
-Codex ran `gpt-6.2-sol` with high reasoning effort. Rounds 1 and 2 returned
-`CHANGES`. The review tool did not expose token usage.
+Codex ran `gpt-6.2-sol` with high reasoning effort. Rounds 1 through 3 returned
+`CHANGES`. The review extended past three rounds after Sol reproduced loss of
+the only pending draft in S4. The review tool did not expose token usage.
 
 | ID | Severity | Outcome | Evidence |
 | --- | --- | --- | --- |
 | S1 | blocker | Resolved in round 2 | A scratch buffer verifies the undo file against the archived text before recovery changes the source. The regression compares the native undo file before and after a failed recovery. |
-| S2 | blocker | Fixed after round 2 | Source-specific archive keys separate literal `%` paths. Fundo discards a loaded native tree when the file matches another source's manifest and the tree matches the native bytes. The collision test uses matching text and checks that sync cannot publish the foreign tree. |
+| S2 | blocker | Fixed after round 3 | Fundo checks for a foreign native tree when opening a file or enabling Fundo with a buffer already open. It enumerates manifests using the literal archive directory path. The regression uses matching text and includes `arc[2026]`. |
 | S3 | should | Resolved in round 2 | Disabling baselines switches a baseline pointer to a full generation and preserves other full captures. |
-| S4 | should | Fixed after round 2 | Both sync paths hold pending transfers while an active buffer has `noundofile` or an empty `undodir`. Wiping that buffer keeps the pending capture available for replay. |
-| S5 | should | Fixed after round 2 | `BufWinEnter` and `FileChangedShellPost` run recovery after modelines. When native undo aborts the read, Fundo applies modelines on the next main-loop turn and checks eligibility. |
+| S4 | should | Fixed after round 3 | Both sync paths hold pending transfers while persistence is off. A skipped detach keeps the pending draft. Reopening retains the original native tree before loading the pending draft. |
+| S5 | should | Fixed after round 3 | `BufWinEnter` and `FileChangedShellPost` run recovery after modelines. After an aborted read, Fundo confirms its private autocmd ran before checking recovery eligibility. |
 | S6 | should | Resolved in round 2 | Delete pruning keeps pointerless generation directories with captures. The test repairs a pointer after startup cleanup. |
 | S7 | nit | Deferred | Directory synchronization for a search-only ancestor is a separate filesystem change. |
 | S8 | nit | Deferred | The unreachable fast-event branches have no effect on recovery. |
-| S9 | should | Fixed after round 2 | The association probe identifies the destination source before reading its legacy baseline. |
-| S10 | should | Fixed after round 2 | Disabling baselines loads the promoted full generation on the same open. |
+| S9 | should | Resolved in round 3 | The association probe identifies the destination source before reading its legacy baseline. |
+| S10 | should | Resolved in round 3 | Disabling baselines loads the promoted full generation on the same open. |
 
 On Neovim 0.12.6, the seven regression cases failed at `327e3e9` and passed after
 the fixes. `make test` passed 347 tests. `make lint` and `git diff --check`
@@ -66,3 +67,9 @@ this record was updated.
 With the updated specs, seven cases failed at `af41728` and passed after the
 round 2 fixes. `make test` passed 348 tests. `make lint` and `git diff --check`
 passed. The fix commits are unsigned because the signing agent was unavailable.
+
+Four additional cases failed at `d6627a3` with the updated specs. The round 3
+fixes cover both ownership checks, reopen with a pending draft and an older
+native tree, and an aborted read with `eventignore=User`. `make test` passed
+351 tests in standard and shuffled order with seed `48271`. `make lint` and
+`git diff --check` passed.

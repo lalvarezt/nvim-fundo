@@ -76,6 +76,7 @@ function Manager:detach(bufnr)
             self:finishCapture(u)
         else
             if u.pendingTransfer then
+                if ok and u.pendingTransfer.undoContents then u.pendingTransfer.recoverOnOpen = true end
                 self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
             end
             if u.captureFailure then self.captureFailures[u.fallbackPath] = u.captureFailure end
@@ -142,12 +143,16 @@ function Manager:attach(bufnr, trigger)
         if self:trackingReason(bufnr, trigger) then return end
         local u = undo:new(bufnr, self.archivesDir)
         if u:attach() then
-            if self.pendingTransfers[u.fallbackPath] then
+            local pending = self.pendingTransfers[u.fallbackPath]
+            if pending and path.normalize(pending.name) == path.normalize(u.name) then
                 -- The buffer may have changed while Fundo was disabled. Capture
                 -- its current history before retrying the older detached copy.
                 u:reset(true)
-                if not vim.bo[bufnr].modified and (u:isEmpty() or self.pendingTransfers[u.fallbackPath].fromJournal) then
-                    u.pendingRecovery = self.pendingTransfers[u.fallbackPath]
+                if not vim.bo[bufnr].modified and (u:isEmpty() or pending.recoverOnOpen or pending.fromJournal) then
+                    u.pendingRecovery = pending
+                    if pending.recoverOnOpen then
+                        u.pendingNativeSequence = utils.bufCall(bufnr, fn.undotree).seq_last
+                    end
                 end
             end
             self.undos[bufnr] = u
@@ -555,12 +560,22 @@ function Manager:initialize()
         vim.schedule(function()
             if not self.initialized or not api.nvim_buf_is_loaded(bufnr) or reads[bufnr] ~= read then return end
             if vim.bo[bufnr].modeline and vim.o.modelines > 0 then
+                local ran = false
+                local id = api.nvim_create_autocmd('User', {
+                    group = 'Fundo', pattern = 'FundoApplyModelines', once = true,
+                    callback = function() ran = true end,
+                })
                 local ok = pcall(utils.bufCall, bufnr, function()
                     api.nvim_exec_autocmds('User', {
                         group = 'Fundo', pattern = 'FundoApplyModelines', modeline = true,
                     })
                 end)
-                if not ok then return end
+                if not ran then pcall(api.nvim_del_autocmd, id) end
+                if reads[bufnr] ~= read then return end
+                if not ok or not ran then
+                    reads[bufnr] = nil
+                    return
+                end
             end
             afterRead(bufnr, true)
         end)
@@ -636,6 +651,7 @@ function Manager:initialize()
             local u = self:attach(bufnr)
             if u then
                 attached = attached + 1
+                u:discardForeignNative()
                 u:check()
             end
         end

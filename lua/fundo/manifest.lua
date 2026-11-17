@@ -174,10 +174,16 @@ function M.hasForeignNative(archivesDir, name, undoPath, fallbackPath)
     local legacy = path.join(archivesDir, path.basename(undoPath))
     local recorded = owner(legacy)
     if recorded and recorded ~= source then return true end
-    for _, filename in ipairs(fn.glob(path.join(M.dir(archivesDir), '@*.json'), false, true)) do
-        local candidate = path.join(archivesDir, path.basename(filename):sub(1, -6))
-        recorded = owner(candidate)
-        if recorded and recorded ~= source then return true end
+    local scan = vim.uv.fs_scandir(M.dir(archivesDir))
+    if scan then
+        while true do
+            local filename = vim.uv.fs_scandir_next(scan)
+            if not filename then break end
+            if filename:match('^@.*%.json$') then
+                recorded = owner(path.join(archivesDir, filename:sub(1, -6)))
+                if recorded and recorded ~= source then return true end
+            end
+        end
     end
     return false
 end

@@ -83,6 +83,38 @@ describe('undo directory changes.', function()
         end)
     end
 
+    it('recovers a detached draft over an older native tree before retrying its save.', function()
+        local result = session.run({tmpdir = dir, file = dir .. '/source.txt', undo_dir = dir .. '/undo',
+            archives_dir = dir .. '/archives', body = [[
+                local fn, api = vim.fn, vim.api
+                local manager, fs, storage = require('fundo.manager'), require('fundo.fs'), require('fundo.storage')
+                vim.cmd('edit ' .. fn.fnameescape(FILE))
+                api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+                vim.cmd('write')
+                assert(manager:syncAllSync())
+                local fallback = manager:get(api.nvim_get_current_buf()).fallbackPath
+                api.nvim_buf_set_lines(0, 0, -1, false, {'draft'})
+                local write = fs.writeFileSync
+                fs.writeFileSync = function() error('archive unavailable') end
+                assert(not manager:syncAllSync())
+                vim.bo.undofile = false
+                vim.cmd('bwipeout!')
+                fs.writeFileSync = write
+                assert(manager.pendingTransfers[fallback] and not manager.pendingTransfers[fallback].fromJournal)
+                vim.cmd('edit ' .. fn.fnameescape(FILE))
+                assert(BufferText() == 'saved' and not vim.bo.modified)
+                assert(manager:syncAllSync())
+                local retained = false
+                for _, capture in ipairs(storage.candidates(fallback)) do
+                    if capture.retained and capture.contents == 'saved\n' then retained = true end
+                end
+                vim.cmd('undo')
+                WriteReport({BufferText(), tostring(retained), tostring(manager.pendingTransfers[fallback] == nil)})
+                vim.cmd('quitall!')
+            ]]})
+        assert.same({'draft', 'true', 'true'}, result.lines)
+    end)
+
     for _, adjacent in ipairs({false, true}) do
         for _, deferred in ipairs({false, true}) do
             it('moves a clean baseline with adjacent=' .. tostring(adjacent) .. ' and deferred=' .. tostring(deferred), function()
