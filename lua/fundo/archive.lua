@@ -201,7 +201,7 @@ function M.associate(oldPath, newPath)
     local fallback = undo.archivePath(newPath, undoPath, config.archives_dir)
     local current = api.nvim_buf_get_lines(bufnr, 0, -1, false)
     local currentText = table.concat(current, '\n') .. '\n'
-    local existing, generationError = storage.read(fallback)
+    local existing, generationError = storage.read(fallback, newPath)
     assert(existing or generationError == 'missing', generationError)
     if existing then
         assert(existing.baselineOnly and existing.contents == currentText,
@@ -210,6 +210,7 @@ function M.associate(oldPath, newPath)
         error('destination already has a fallback archive; both histories were kept')
     elseif fs.statSync(fallback .. '.base') then
         local probe = undo:new(bufnr, config.archives_dir)
+        probe.name = newPath
         probe.fallbackPath, probe.baselinePath = fallback, fallback .. '.base'
         local previous = probe:readBaseline()
         assert(previous and table.concat(previous, '\n') .. '\n' == currentText,

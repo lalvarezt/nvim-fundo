@@ -32,6 +32,12 @@ local function createEvents()
         callback = function(t) event:emit(t.event) end
     })
 
+    api.nvim_create_autocmd('User', {
+        group = groupId,
+        pattern = 'FundoApplyModelines',
+        callback = function() end,
+    })
+
     return disposable:create(function()
         log.debug('deleting autocmd group:', groupId)
         api.nvim_del_augroup_by_id(groupId)

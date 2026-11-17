@@ -95,6 +95,19 @@ describe('baseline metadata policy.', function()
             vim.cmd('quitall!')
         ]])
         assert.same({'false', 'external|vim: set noundofile:'}, lines)
+        lines = run([[
+            vim.o.modeline = true
+            vim.fn.writefile({'invalid native undo'}, vim.fn.undofile(FILE))
+            local ok, err = pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(FILE))
+            assert(not ok and err:find('E823', 1, true))
+            local drained = false
+            vim.schedule(function() drained = true end)
+            assert(vim.wait(1000, function() return drained end))
+            vim.cmd('undo')
+            WriteReport({tostring(vim.bo.undofile), BufferText()})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'false', 'external|vim: set noundofile:'}, lines)
     end)
 
     it('removes metadata when setup disables a baseline-only record.', function()
@@ -114,6 +127,30 @@ describe('baseline metadata policy.', function()
             vim.cmd('quitall!')
         ]])
         assert.same({'true', 'true', 'true', 'true'}, lines)
+    end)
+
+    it('loads the promoted full generation on the first open with baselines disabled.', function()
+        run([[
+            local fundo, manager, storage = require('fundo'), require('fundo.manager'), require('fundo.storage')
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            assert(manager:syncAllSync())
+            local baseline = fundo.status().generation
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'archived draft'})
+            assert(manager:syncAllSync())
+            local fallback = fundo.status().fallback.path
+            vim.cmd('bwipeout!')
+            storage.restorePointer(fallback, baseline, storage.revision(fallback))
+            vim.cmd('quitall!')
+        ]])
+        local lines = run([[
+            local fundo, config = require('fundo'), require('fundo.config')
+            fundo.setup({archives_dir = config.archives_dir, baseline_max_file_size = 0})
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('undo')
+            WriteReport({BufferText()})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'archived draft'}, lines)
     end)
 
     it('captures before deferring persistence and skips unchanged writes.', function()

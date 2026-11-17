@@ -70,25 +70,24 @@ function Manager:detach(bufnr)
     local u = self.undos[bufnr]
     if u then
         log.debug('detaching buffer:', bufnr, bufferName(bufnr))
-        local ok, err = pcall(function()
-            u:transferSync()
-        end)
-        if not ok then
-            pcall(log.warn, 'failed to transfer undo archive for buffer', bufnr, err)
-            vim.notify('Fundo could not save ' .. u.name .. ': ' .. tostring(err)
-                .. '; inspect :FundoDoctor for recovery copies', vim.log.levels.WARN)
+        local ok, result = pcall(u.transferSync, u)
+        if ok and result then
+            self.pendingTransfers[u.fallbackPath] = nil
+            self:finishCapture(u)
+        else
             if u.pendingTransfer then
                 self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
             end
             if u.captureFailure then self.captureFailures[u.fallbackPath] = u.captureFailure end
-            u:dispose()
-            self.undos[bufnr] = nil
-            return false, err
         end
-        self.pendingTransfers[u.fallbackPath] = nil
-        self:finishCapture(u)
         u:dispose()
         self.undos[bufnr] = nil
+        if not ok then
+            pcall(log.warn, 'failed to transfer undo archive for buffer', bufnr, result)
+            vim.notify('Fundo could not save ' .. u.name .. ': ' .. tostring(result)
+                .. '; inspect :FundoDoctor for recovery copies', vim.log.levels.WARN)
+            return false, result
+        end
         log.debug('detached buffer:', bufnr)
     else
         log.trace('detach skipped; buffer is not attached:', bufnr, bufferName(bufnr))
@@ -520,6 +519,7 @@ function Manager:initialize()
     self.initialized = true
     log.info('manager initialized:', 'archives_dir:', self.archivesDir, 'limit_mb:', self.limitArchivesSize,
         'retention_days:', self.retentionDays or 'none')
+    local reads = {}
     table.insert(self.disposables, disposable:create(function()
         log.debug('disposing manager:', 'attached_buffers:', vim.tbl_count(self.undos))
         for _, b in pairs(self.undos) do
@@ -532,8 +532,8 @@ function Manager:initialize()
         self.initialized = false
         self.undos = {}
         self.lastScannedtime = 0
+        reads = {}
     end))
-    local reads = {}
     local function afterRead(bufnr, edited)
         reads[bufnr] = nil
         local u = self:attach(bufnr)
@@ -549,12 +549,19 @@ function Manager:initialize()
         logBufferEvent('BufReadPost', bufnr)
         local read = {}
         reads[bufnr] = read
-        self:attach(bufnr)
-        -- A failed native undo read can abort before BufWinEnter. A modeline
-        -- may not have run in that case, so only recover with modelines off.
+        local u = self:attach(bufnr)
+        if u then u:discardForeignNative() end
+        -- A failed native undo read can abort before Neovim applies modelines.
         vim.schedule(function()
             if not self.initialized or not api.nvim_buf_is_loaded(bufnr) or reads[bufnr] ~= read then return end
-            if vim.bo[bufnr].modeline and vim.o.modelines > 0 then return end
+            if vim.bo[bufnr].modeline and vim.o.modelines > 0 then
+                local ok = pcall(utils.bufCall, bufnr, function()
+                    api.nvim_exec_autocmds('User', {
+                        group = 'Fundo', pattern = 'FundoApplyModelines', modeline = true,
+                    })
+                end)
+                if not ok then return end
+            end
             afterRead(bufnr, true)
         end)
     end, self.disposables)

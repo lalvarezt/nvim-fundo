@@ -40,6 +40,10 @@ describe('explicit history association.', function()
             local result = run(([[
                 local fundo = require('fundo')
                 vim.cmd('edit ' .. vim.fn.fnameescape(MOVED))
+                if %q == 'legacy' then
+                    assert(require('fundo.manager'):syncAllSync())
+                    require('fundo.storage').remove(fundo.status().fallback.path)
+                end
                 local sourceBefore = fundo.status(FILE)
                 vim.cmd('FundoAssociate ' .. vim.fn.fnameescape(FILE))
                 local out = {BufferText()}
@@ -58,7 +62,7 @@ describe('explicit history association.', function()
                 assert(fundo.recovery().kind == 'association')
                 WriteReport(out)
                 vim.cmd('quitall!')
-            ]]):format(kind))
+            ]]):format(kind, kind))
             assert.same({'outside', kind == 'baseline' and 'original' or 'saved', 'outside'}, result)
             fn.writefile({'later'}, moved)
             local reopened = run([[

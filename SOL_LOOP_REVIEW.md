@@ -41,19 +41,21 @@ Review started at `327e3e9` on `experiments`. The base is
 `c2b83cb19e4ac475f2b08aaf775afe3da19bc495`. The diff covers undo preservation,
 checkpoints, storage failures, recovery, and buffer persistence options.
 
-Codex ran `gpt-6.2-sol` with high reasoning effort. Round 1 returned `CHANGES`.
-The fixes below await recheck. The review tool did not expose token usage.
+Codex ran `gpt-6.2-sol` with high reasoning effort. Rounds 1 and 2 returned
+`CHANGES`. The review tool did not expose token usage.
 
 | ID | Severity | Outcome | Evidence |
 | --- | --- | --- | --- |
-| S1 | blocker | Fixed | A scratch buffer verifies the undo file against the archived text before recovery changes the source. The regression compares the native undo file before and after a failed recovery. |
-| S2 | blocker | Fixed | A literal `%` uses a source-specific archive key. Verified legacy ownership permits reuse. The collision test opens `a%b` and `a/b` with the same native undo filename. |
-| S3 | should | Fixed | Disabling baselines switches a baseline pointer to a full generation and preserves other full captures. |
-| S4 | should | Fixed | Both sync paths hold pending transfers while an active buffer has `noundofile` or an empty `undodir`. |
-| S5 | should | Fixed | `BufWinEnter` and `FileChangedShellPost` run recovery after modelines. After a native undo read aborts, recovery runs on the next main-loop turn if modelines are disabled. |
-| S6 | should | Fixed | Delete pruning keeps pointerless generation directories with captures. The test repairs a pointer after startup cleanup. |
+| S1 | blocker | Resolved in round 2 | A scratch buffer verifies the undo file against the archived text before recovery changes the source. The regression compares the native undo file before and after a failed recovery. |
+| S2 | blocker | Fixed after round 2 | Source-specific archive keys separate literal `%` paths. Fundo discards a loaded native tree when the file matches another source's manifest and the tree matches the native bytes. The collision test uses matching text and checks that sync cannot publish the foreign tree. |
+| S3 | should | Resolved in round 2 | Disabling baselines switches a baseline pointer to a full generation and preserves other full captures. |
+| S4 | should | Fixed after round 2 | Both sync paths hold pending transfers while an active buffer has `noundofile` or an empty `undodir`. Wiping that buffer keeps the pending capture available for replay. |
+| S5 | should | Fixed after round 2 | `BufWinEnter` and `FileChangedShellPost` run recovery after modelines. When native undo aborts the read, Fundo applies modelines on the next main-loop turn and checks eligibility. |
+| S6 | should | Resolved in round 2 | Delete pruning keeps pointerless generation directories with captures. The test repairs a pointer after startup cleanup. |
 | S7 | nit | Deferred | Directory synchronization for a search-only ancestor is a separate filesystem change. |
 | S8 | nit | Deferred | The unreachable fast-event branches have no effect on recovery. |
+| S9 | should | Fixed after round 2 | The association probe identifies the destination source before reading its legacy baseline. |
+| S10 | should | Fixed after round 2 | Disabling baselines loads the promoted full generation on the same open. |
 
 On Neovim 0.12.6, the seven regression cases failed at `327e3e9` and passed after
 the fixes. `make test` passed 347 tests. `make lint` and `git diff --check`
@@ -61,4 +63,6 @@ against the base passed. The base diff went from 62 files with 12,019 insertions
 and 168 deletions to 62 files with 12,218 insertions and 169 deletions before
 this record was updated.
 
-The fix commit is unsigned because the signing agent was unavailable.
+With the updated specs, seven cases failed at `af41728` and passed after the
+round 2 fixes. `make test` passed 348 tests. `make lint` and `git diff --check`
+passed. The fix commits are unsigned because the signing agent was unavailable.

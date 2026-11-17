@@ -72,7 +72,9 @@ describe('undo directory changes.', function()
                     assert(vim.wait(1000, function() return done end) and saved)
                     assert(manager.pendingTransfers[u.fallbackPath] and storage.revision(u.fallbackPath) == revision)
                     assert(vim.deep_equal(native, fn.readfile(u.undoPath, 'b')))
-                    if option == 'undodir' then vim.o.undodir = oldDir else vim.bo.undofile = true end
+                    vim.cmd('bwipeout!')
+                    assert(manager.pendingTransfers[u.fallbackPath], 'wiping the opted-out buffer lost its pending save')
+                    vim.o.undodir = oldDir
                     assert(manager:syncAllSync())
                     WriteReport({(storage.read(u.fallbackPath).contents:gsub('\n$', ''))})
                     vim.cmd('quitall!')

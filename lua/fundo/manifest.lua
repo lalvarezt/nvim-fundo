@@ -158,6 +158,30 @@ function M.read(manifestPath, expectedFallbackPath)
     return value
 end
 
+function M.hasForeignNative(archivesDir, name, undoPath, fallbackPath)
+    local native = stat(undoPath)
+    if not native then return false end
+    local destination = path.normalize(undoPath)
+    local function owner(candidate)
+        local record = M.read(M.path(candidate), candidate)
+        if record and record.fallback.stat and record.undo.path == destination
+            and vim.deep_equal(record.undo.stat, native) then
+            return path.normalize(record.source.path)
+        end
+    end
+    local source = path.normalize(name)
+    if owner(fallbackPath) == source then return false end
+    local legacy = path.join(archivesDir, path.basename(undoPath))
+    local recorded = owner(legacy)
+    if recorded and recorded ~= source then return true end
+    for _, filename in ipairs(fn.glob(path.join(M.dir(archivesDir), '@*.json'), false, true)) do
+        local candidate = path.join(archivesDir, path.basename(filename):sub(1, -6))
+        recorded = owner(candidate)
+        if recorded and recorded ~= source then return true end
+    end
+    return false
+end
+
 function M.write(transfer)
     local manifestPath = M.path(transfer.fallbackPath)
     fs.mkdirpSync(path.dirname(manifestPath), dirMode)

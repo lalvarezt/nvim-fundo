@@ -171,6 +171,7 @@ function Undo:reset(dirty, bufName)
         self.lastError = nil
         self.lastCapturedTick = nil
         self.checkedNative = false
+        self.foreignNative = false
         self.undoPath = fn.undofile(name)
         self.fallbackPath = Undo.archivePath(name, self.undoPath, self.dir)
         self.baselinePath = self.fallbackPath .. '.base'
@@ -294,6 +295,32 @@ function Undo:saveUndo(target)
         log.debug('saveUndo failed:', self.undoPath, cmdErr)
     end
     return cmdOk, cmdErr
+end
+
+function Undo:discardForeignNative()
+    self.foreignNative = self.undoPath ~= ''
+        and manifest.hasForeignNative(self.dir, self.name, self.undoPath, self.fallbackPath)
+    if not self.foreignNative or self:isEmpty() then return end
+
+    -- A reload can keep a buffer's own history. Discard only the tree that
+    -- matches the foreign native file Neovim loaded.
+    local temporary = fn.tempname()
+    local saved = self:saveUndo(temporary)
+    local ok, matches = pcall(function()
+        return saved and vim.deep_equal(fn.readfile(temporary, 'b'), fn.readfile(self.undoPath, 'b'))
+    end)
+    pcall(fs.unlinkSync, temporary)
+    if not ok or not matches then return end
+
+    local options = vim.bo[self.bufnr]
+    local levels, modified, modifiable = options.undolevels, options.modified, options.modifiable
+    options.modifiable = true
+    options.undolevels = -1
+    local cleared, err = pcall(api.nvim_buf_set_text, self.bufnr, 0, 0, 0, 0, {''})
+    options.undolevels = levels
+    options.modifiable = modifiable
+    options.modified = modified
+    if not cleared then error(err, 0) end
 end
 
 function Undo:baselineLimitBytes()
@@ -838,6 +865,7 @@ function Undo:loadFallBack(transfer)
     if transfer and transfer.baselineOnly then
         return self:loadBaseline(transfer)
     end
+    if not transfer and self.foreignNative then return false, 'foreign-undo' end
     if not transfer and not fs.statSync(self.fallbackPath) then
         log.trace('loadFallBack skipped; fallback missing:', self.fallbackPath)
         return false, 'missing-fallback'
@@ -1089,12 +1117,14 @@ function Undo:check()
         self:finishTransfer(self.pendingTransfer)
     end
     local committed, generationError = storage.read(self.fallbackPath, self.name)
+    if committed and committed.baselineOnly and self:baselineLimitBytes() <= 0 then
+        self.generation = committed.expectedGeneration
+        local _, err = self:saveBaseline()
+        if err or not self.generation then return end
+        committed, generationError = storage.read(self.fallbackPath, self.name)
+    end
     if committed then
         self.generation = committed.expectedGeneration
-        if committed.baselineOnly and self:baselineLimitBytes() <= 0 then
-            self:saveBaseline()
-            return
-        end
         local loaded, reason = self:loadFallBack(committed)
         if loaded then self.checkedNative = true; return end
         if not committed.baselineOnly then
