@@ -52,9 +52,15 @@ local function hasCaptures(dir, owned)
     return false
 end
 
+local function pointerExists(filename)
+    local stat, err, code = fs.statSync(filename)
+    if not stat and code ~= 'ENOENT' then error(err or ('cannot inspect generation pointer: ' .. filename)) end
+    return stat ~= nil
+end
+
 local function head(fallbackPath)
     local filename = path.join(M.directory(fallbackPath), 'current')
-    if not fs.statSync(filename) then return end
+    if not pointerExists(filename) then return end
     local value = readJson(filename)
     assert(type(value) == 'table' and value.version == 1 and idValid(value.current), 'invalid generation pointer')
     assert(value.previous == nil or idValid(value.previous), 'invalid previous generation')
@@ -80,7 +86,7 @@ end
 
 function M.revision(fallbackPath)
     local filename = path.join(M.directory(fallbackPath), 'current')
-    return fs.statSync(filename) and fn.sha256(readFile(filename)) or false
+    return pointerExists(filename) and fn.sha256(readFile(filename)) or false
 end
 
 function M.inspect(fallbackPath)
@@ -471,7 +477,7 @@ function M.clean(archivesDir)
         if item.kind == 'directory' and item.name:match('^[a-f0-9]+$') then
             local dir = path.join(M.root(archivesDir), item.name)
             pcall(withDirectoryLock, dir, function()
-                if not fs.statSync(path.join(dir, 'current')) then
+                if not pointerExists(path.join(dir, 'current')) then
                     if not hasCaptures(dir) then fn.delete(dir, 'rf') end
                     return
                 end

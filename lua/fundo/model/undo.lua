@@ -1199,6 +1199,7 @@ function Undo:check()
         self.lastError = transferError('generation', generationError)
         return
     end
+    self.unmatchedNative = not self.foreignNative and fs.statSync(self.undoPath) and self.undoPath or nil
     local _, recordErr = manifest.read(manifest.path(self.fallbackPath), self.fallbackPath)
     if recordErr and recordErr ~= 'missing' then
         pcall(log.warn, 'invalid recovery metadata:', self.name, recordErr)
@@ -1210,11 +1211,10 @@ function Undo:check()
         log.debug('check completed; fallback loaded:', self.bufnr, self.name or '')
         return
     end
-    if not self.foreignNative and fs.statSync(self.undoPath) then
+    if self.unmatchedNative then
         -- A legacy baseline can still match the native tree when its fallback does not.
         local baseline = self:readBaseline()
         if baseline and self:loadFallBack(nil, baseline) then return end
-        self.unmatchedNative = self.undoPath
         return
     end
     if self:loadBaseline() then

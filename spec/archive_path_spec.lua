@@ -89,7 +89,7 @@ describe('configured archive paths.', function()
         run([[
             local dir = vim.fn.fnamemodify(FILE, ':h') .. '/arc,old'
             vim.fn.mkdir(dir, 'p')
-            vim.o.undodir = vim.fn.escape(dir, ',')
+            vim.o.undodir = vim.fn.fnamemodify(FILE, ':h') .. '/missing,   ' .. vim.fn.escape(dir, ',')
             assert(vim.fn.fnamemodify(vim.fn.undofile(FILE), ':h') == dir)
             local ok, err = pcall(require('fundo').setup, {archives_dir = dir})
             assert(not ok and tostring(err):find('undodir', 1, true))

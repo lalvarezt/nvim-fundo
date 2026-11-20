@@ -39,17 +39,23 @@ function FS.copyFileSync(path, newPath)
     end
 end
 
-function FS.unlinkArchiveSync(filename)
+function FS.isNativeUndoFile(filename)
     local fd, err, code = FS.openSync(filename, 'r', 0)
     if not fd then
         if code == 'ENOENT' then return false end
-        error(err)
+        return nil, err
     end
     -- An old overlapping layout can leave a native file after its metadata is gone.
     local signature, readError = FS.readSync(fd, 9, 0)
     FS.closeSync(fd)
-    assert(signature, readError)
-    if signature == 'Vim\159UnDo\229' then return false end
+    if not signature then return nil, readError end
+    return signature == 'Vim\159UnDo\229'
+end
+
+function FS.unlinkArchiveSync(filename)
+    local native, err = FS.isNativeUndoFile(filename)
+    assert(native ~= nil, err)
+    if native then return false end
     local removed, failure, removeCode = FS.unlinkSync(filename)
     if not removed and removeCode ~= 'ENOENT' then error(failure) end
     return removed == true

@@ -92,6 +92,38 @@ describe('durable pending recovery.', function()
         assert.same({'newer'}, result)
     end)
 
+    it('does not import a stale first-publication journal when pointer stat fails.', function()
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local manager = require('fundo.manager')
+            local u = manager:get(vim.api.nvim_get_current_buf())
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'stale draft'})
+            require('fundo.journal').write(u:transferSnapshot())
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'committed draft'})
+            assert(manager:syncAllSync())
+            os.exit(0)
+        ]])
+        run([[
+            local fundo, manager = require('fundo'), require('fundo.manager')
+            fundo.disable()
+            local fs, storage = require('fundo.fs'), require('fundo.storage')
+            local record = require('fundo.journal').list(manager.archivesDir)[1]
+            local pointer = storage.directory(record.fallbackPath) .. '/current'
+            local stat = fs.statSync
+            fs.statSync = function(target)
+                if target == pointer then return nil, 'permission denied', 'EACCES' end
+                return stat(target)
+            end
+            fundo.enable()
+            assert(not manager.pendingTransfers[record.fallbackPath])
+            fs.statSync = stat
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.cmd('undo')
+            assert(BufferText() == 'committed draft')
+            vim.cmd('quitall!')
+        ]])
+    end)
+
     it('journals new edits when an archive outage continues after restart.', function()
         run(firstDraft .. [[vim.cmd('quitall!')]])
         run(outage .. [[

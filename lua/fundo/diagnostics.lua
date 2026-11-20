@@ -166,7 +166,10 @@ local function scanDirectory(dir)
             break
         end
         if kind == 'file' then
-            result[name] = fs.statSync(path.join(dir, name))
+            local filename = path.join(dir, name)
+            if dir ~= config.archives_dir or not fs.isNativeUndoFile(filename) then
+                result[name] = fs.statSync(filename)
+            end
         end
     end
     return result

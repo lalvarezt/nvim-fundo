@@ -200,7 +200,10 @@ function Manager:listFileStats(dir, bufferSize)
             for _, entry in ipairs(entries) do
                 if entry.type == 'file' then
                     local name = entry.name
-                    tasks[name] = fs.stat(path.join(dir, name))
+                    local filename = path.join(dir, name)
+                    if dir ~= self.archivesDir or fs.isNativeUndoFile(filename) == false then
+                        tasks[name] = fs.stat(filename)
+                    end
                 end
             end
         end))
@@ -368,21 +371,22 @@ function Manager:scanArchivesDir()
     end)
 end
 
-local function canReplay(transfer)
-    if fn.undofile(transfer.name) == '' then return false end
+local function replay(transfer, recovering)
     local bufnr = utils.bufnrForPath(transfer.name)
-    if bufnr < 0 or not api.nvim_buf_is_loaded(bufnr) then
-        return vim.go.undofile and vim.go.undolevels >= 0
-    end
-    return undo:new(bufnr):canPersist()
-end
-
-local function replay(transfer)
-    if fn.undofile(transfer.name) ~= transfer.undoPath then
-        -- Keep the original pair recoverable until its destination is available.
-        journal.write(transfer)
+    local loaded = bufnr >= 0 and api.nvim_buf_is_loaded(bufnr)
+    local destination = fn.undofile(transfer.name)
+    if loaded and (destination == '' or not undo:new(bufnr):canPersist()) then return false end
+    if destination == '' or destination ~= transfer.undoPath
+        or (not loaded and (not vim.go.undofile or vim.go.undolevels < 0)) then
+        -- The detached snapshot may only exist in memory after a journal outage.
+        local saved, err = pcall(journal.write, transfer)
+        if not saved then
+            transfer.lastError = {stage = 'journal', message = tostring(err), time = os.time()}
+            error(err, 0)
+        end
         return false
     end
+    assert(not recovering, 'pending snapshot still requires recovery into its buffer')
     undo.completePendingTransferSync(transfer)
     return true
 end
@@ -416,7 +420,7 @@ function Manager:syncAll(block)
                 local pendingKey = key
                 if not activePaths[key] then
                     tasks['pending:' .. pendingKey] = onMain(function()
-                        if self.pendingTransfers[pendingKey] ~= transfer or not canReplay(transfer) then return end
+                        if self.pendingTransfers[pendingKey] ~= transfer then return end
                         if replay(transfer) and self.pendingTransfers[pendingKey] == transfer then
                             self.pendingTransfers[pendingKey] = nil
                         end
@@ -488,18 +492,12 @@ function Manager:syncAllSync()
         end
     end
     for key, transfer in pairs(self.pendingTransfers) do
-        if not canReplay(transfer) then goto continue end
         local recovering = false
         for _, u in pairs(self.undos) do
             if u.pendingRecovery == transfer then recovering = true end
         end
-        local ok, err
-        if recovering then
-            err = 'pending snapshot still requires recovery into its buffer'
-        else
-            ok, err = pcall(replay, transfer)
-            if ok and not err then goto continue end
-        end
+        local ok, err = pcall(replay, transfer, recovering)
+        if ok and not err then goto continue end
         if ok then
             self.pendingTransfers[key] = nil
             for _, u in pairs(self.undos) do

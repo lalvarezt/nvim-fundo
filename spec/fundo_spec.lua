@@ -350,7 +350,7 @@ describe('fundo integration.', function()
         require('fundo.storage').remove(fallbackPath)
         local original = fn.readfile(undoPath, 'b')
         fn.writefile({'corrupt archive'}, fallbackPath)
-        require('fundo.manifest').remove(fallbackPath)
+        fn.writefile({'{broken'}, require('fundo.manifest').path(fallbackPath))
         fn.writefile({'mismatched baseline'}, baselinePath)
         external_write({'external', 'change'})
         vim.cmd('edit ' .. fn.fnameescape(file))
@@ -1364,6 +1364,9 @@ describe('fundo integration.', function()
 
         local fallbackA, recordA = touchRecord(file_a, 100)
         local fallbackB, recordB, sizeB = touchRecord(file_b, 200)
+        local native = path.join(archivesDir, 'old-native')
+        fs.copyFileSync(fn.undofile(file_b), native)
+        uv.fs_utime(native, 300, 300)
         manager.limitArchivesSize = (sizeB + 1) / 1024 / 1024
 
         async(function()
@@ -1376,6 +1379,7 @@ describe('fundo integration.', function()
             assert.Nil(fs.statSync(recordPath))
         end
         assert.Nil(fs.statSync(require('fundo.storage').directory(fallbackA)))
+        assert.same(fn.readfile(fn.undofile(file_b), 'b'), fn.readfile(native, 'b'))
         for _, recordPath in ipairs(recordB) do
             assert(fs.statSync(recordPath), 'expected newest record to be kept: ' .. fallbackB)
         end

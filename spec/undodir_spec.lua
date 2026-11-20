@@ -77,6 +77,8 @@ describe('undo directory changes.', function()
                     vim.go.undofile = option ~= 'undofile'
                     assert(manager:syncAllSync())
                     assert(manager.pendingTransfers[u.fallbackPath] and storage.revision(u.fallbackPath) == revision)
+                    local drafts = require('fundo.journal').list(manager.archivesDir, true)
+                    assert(drafts[1] and drafts[1].contents == 'draft\n')
                     vim.go.undofile = true
                     vim.o.undodir = '.'
                     assert(manager:syncAllSync())
