@@ -32,7 +32,7 @@ The goal of nvim-fundo is to make Neovim's undo file become stable and useful.
 - Preview recovered changes without changing the source undo position
 - Choose capture on open, on write, or by explicit request
 
-See [implemented improvements](./IMPROVEMENTS.md) for behavior and tradeoffs.
+For the changes in this fork, see the [upstream comparison](./UPSTREAM_COMPARISON.md).
 
 ## Quickstart
 
@@ -46,7 +46,8 @@ Install with [Packer.nvim](https://github.com/wbthomason/packer.nvim):
 
 ```lua
 use {
-    'kevinhwang91/nvim-fundo'
+    'lalvarezt/nvim-fundo',
+    branch = 'experiments',
 }
 ```
 
@@ -54,7 +55,8 @@ use {
 
 ```lua
 use {
-    'kevinhwang91/nvim-fundo'
+    'lalvarezt/nvim-fundo',
+    branch = 'experiments',
 }
 
 vim.o.undofile = true
