@@ -66,6 +66,44 @@ describe('durable pending recovery.', function()
         end)
     end
 
+    for _, state in ipairs({'loaded', 'reopened'}) do
+        it('journals an earlier draft with persistence disabled and the source ' .. state .. '.', function()
+            run(([[
+                local fn, api = vim.fn, vim.api
+                local fs, manager = require('fundo.fs'), require('fundo.manager')
+                vim.cmd('edit ' .. fn.fnameescape(FILE))
+                api.nvim_buf_set_lines(0, 0, -1, false, {'earlier draft'})
+                local write = fs.writeFileSync
+                fs.writeFileSync = function() error('journal unavailable') end
+                local failed = false
+                require('fundo').sync():catch(function() failed = true end)
+                assert(vim.wait(1000, function() return failed end))
+                vim.cmd('set noundofile')
+                if %q == 'reopened' then
+                    vim.cmd('bwipeout!')
+                    vim.cmd('edit ' .. fn.fnameescape(FILE))
+                end
+                api.nvim_buf_set_lines(0, 0, -1, false, {'edit after opting out'})
+                fs.writeFileSync = write
+                local done = false
+                require('fundo').sync():thenCall(function() done = true end)
+                assert(vim.wait(1000, function() return done end))
+                local records = require('fundo.journal').list(manager.archivesDir, true)
+                assert(#records == 1 and records[1].contents == 'earlier draft\n' and records[1].undoContents)
+                assert(not require('fundo.storage').token(records[1].fallbackPath))
+                vim.cmd('quitall!')
+            ]]):format(state))
+            local result = run([[
+                vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+                local current = BufferText()
+                vim.cmd('undo')
+                WriteReport({current, BufferText()})
+                vim.cmd('quitall!')
+            ]])
+            assert.same({'original', 'earlier draft'}, result)
+        end)
+    end
+
     it('replays drafts in capture order when their journals were written in reverse.', function()
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))

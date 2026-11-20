@@ -66,6 +66,13 @@ function Manager:finishCapture(u)
     end
 end
 
+function Manager:keepPending(u)
+    if u.pendingTransfer then
+        self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
+    end
+    if u.captureFailure then self.captureFailures[u.fallbackPath] = u.captureFailure end
+end
+
 function Manager:detach(bufnr)
     local u = self.undos[bufnr]
     if u then
@@ -75,11 +82,10 @@ function Manager:detach(bufnr)
             self.pendingTransfers[u.fallbackPath] = nil
             self:finishCapture(u)
         else
-            if u.pendingTransfer then
-                if u.pendingTransfer.undoContents then u.pendingTransfer.recoverOnOpen = true end
-                self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
+            if u.pendingTransfer and u.pendingTransfer.undoContents then
+                u.pendingTransfer.recoverOnOpen = true
             end
-            if u.captureFailure then self.captureFailures[u.fallbackPath] = u.captureFailure end
+            self:keepPending(u)
         end
         u:dispose()
         self.undos[bufnr] = nil
@@ -178,8 +184,8 @@ function Manager:attach(bufnr, trigger)
                 if ok then
                     self:finishCapture(u)
                     self.pendingTransfers[u.fallbackPath] = nil
-                elseif u.captureFailure then
-                    self.captureFailures[u.fallbackPath] = u.captureFailure
+                else
+                    self:keepPending(u)
                 end
             end)
             log.debug('attached buffer:', bufnr, bufferName(bufnr))
@@ -375,10 +381,10 @@ local function replay(transfer, recovering)
     local bufnr = utils.bufnrForPath(transfer.name)
     local loaded = bufnr >= 0 and api.nvim_buf_is_loaded(bufnr)
     local destination = fn.undofile(transfer.name)
-    if loaded and (destination == '' or not undo:new(bufnr):canPersist()) then return false end
     if destination == '' or destination ~= transfer.undoPath
+        or (loaded and not undo:new(bufnr):canPersist())
         or (not loaded and (not vim.go.undofile or vim.go.undolevels < 0)) then
-        -- The detached snapshot may only exist in memory after a journal outage.
+        -- A previously captured snapshot may only exist in memory after a journal outage.
         local saved, err = pcall(journal.write, transfer)
         if not saved then
             transfer.lastError = {stage = 'journal', message = tostring(err), time = os.time()}
@@ -410,6 +416,9 @@ function Manager:syncAll(block)
                                 self.pendingTransfers[fallbackPath] = nil
                             end
                         end
+                end, function(err)
+                    if self.undos[bufnr] == u then self:keepPending(u) end
+                    error(err, 0)
                     end)
                     -- A changed undodir can move the active capture to a new
                     -- archive key. Its old retry still belongs to this task.
@@ -482,10 +491,7 @@ function Manager:syncAllSync()
             end
         end)
         if not ok then
-            if u.captureFailure then self.captureFailures[u.fallbackPath] = u.captureFailure end
-            if u.pendingTransfer then
-                self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
-            end
+            self:keepPending(u)
             if not u.pendingTransfer or u.lastError then
                 table.insert(failures, ('buffer %s: %s'):format(bufnr, tostring(err)))
             end
@@ -559,10 +565,7 @@ function Manager:initialize()
     table.insert(self.disposables, disposable:create(function()
         log.debug('disposing manager:', 'attached_buffers:', vim.tbl_count(self.undos))
         for _, b in pairs(self.undos) do
-            if b.pendingTransfer then
-                self.pendingTransfers[b.pendingTransfer.fallbackPath] = b.pendingTransfer
-            end
-            if b.captureFailure then self.captureFailures[b.fallbackPath] = b.captureFailure end
+            self:keepPending(b)
             b:dispose()
         end
         self.initialized = false
@@ -649,6 +652,7 @@ function Manager:initialize()
                     self:finishCapture(u)
                     self.pendingTransfers[u.fallbackPath] = nil
                 elseif not ok then
+                    self:keepPending(u)
                     vim.notify('Fundo could not archive the write: ' .. tostring(saved), vim.log.levels.WARN)
                 end
             end
