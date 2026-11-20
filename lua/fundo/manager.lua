@@ -52,12 +52,16 @@ local function logBufferEvent(name, bufnr)
     end
 end
 
-function Manager:finishCapture(u)
-    for _, transfer in ipairs(u.resolvedTransfers or {}) do
+function Manager:removeSuperseded(transfers)
+    for _, transfer in ipairs(transfers or {}) do
         if self.pendingTransfers[transfer.fallbackPath] == transfer then
             self.pendingTransfers[transfer.fallbackPath] = nil
         end
     end
+end
+
+function Manager:finishCapture(u)
+    self:removeSuperseded(u.resolvedTransfers)
     u.resolvedTransfers = nil
     local key = u.resolvedCapture and u.resolvedCapture.fallbackPath or u.fallbackPath
     local failure = self.captureFailures and self.captureFailures[key]
@@ -68,6 +72,8 @@ end
 
 function Manager:keepPending(u)
     if u.pendingTransfer then
+        -- A retargeted transfer owns its predecessors until it commits.
+        self:removeSuperseded(u.pendingTransfer.supersededTransfers)
         self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
     end
     if u.captureFailure then self.captureFailures[u.fallbackPath] = u.captureFailure end

@@ -104,6 +104,48 @@ describe('durable pending recovery.', function()
         end)
     end
 
+    it('keeps a superseded retry from replaying at its old undo destination after restart.', function()
+        local saved = run([[
+            local api, fn = vim.api, vim.fn
+            local fs, manager = require('fundo.fs'), require('fundo.manager')
+            local function sync()
+                local result
+                require('fundo').sync():thenCall(function() result = true end, function() result = false end)
+                assert(vim.wait(1000, function() return result ~= nil end))
+                return result
+            end
+            vim.cmd('edit ' .. fn.fnameescape(FILE))
+            api.nvim_buf_set_lines(0, 0, -1, false, {'committed history'})
+            vim.cmd('write')
+            assert(sync())
+            local write = fs.writeFileSync
+            fs.writeFileSync = function() error('journal unavailable') end
+            api.nvim_buf_set_lines(0, 0, -1, false, {'first draft'})
+            assert(not sync())
+            vim.o.undodir = '.'
+            api.nvim_buf_set_lines(0, 0, -1, false, {'second draft'})
+            assert(not sync())
+            fs.writeFileSync = write
+            assert(sync())
+            local u = manager:get(api.nvim_get_current_buf())
+            local record = require('fundo.storage').read(u.fallbackPath, FILE)
+            WriteReport({vim.trim(record.contents), tostring(#require('fundo.journal').list(manager.archivesDir, true))})
+            vim.cmd('quitall!')
+        ]])
+        local restarted = run([[
+            local fn, manager = vim.fn, require('fundo.manager')
+            local native = fn.undofile(FILE)
+            local fallback = require('fundo.model.undo').archivePath(FILE, native, manager.archivesDir)
+            local before = fn.readfile(native, 'b')
+            assert(manager:syncAllSync())
+            local record = require('fundo.storage').read(fallback, FILE)
+            WriteReport({vim.trim(record.contents), tostring(vim.deep_equal(before, fn.readfile(native, 'b')))})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'committed history', 'true'}, restarted)
+        assert.same({'second draft', '0'}, saved)
+    end)
+
     it('replays drafts in capture order when their journals were written in reverse.', function()
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
