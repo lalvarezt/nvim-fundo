@@ -61,6 +61,28 @@ describe('configured archive paths.', function()
         end)
     end
 
+    it('protects native files when the archive directory overlaps a shared undodir.', function()
+        run([[
+            local fundo, fn = require('fundo'), vim.fn
+            vim.cmd('edit ' .. fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+            vim.cmd('write')
+            assert(require('fundo.manager'):syncAllSync())
+            local ok, err = pcall(fundo.setup, {archives_dir = vim.o.undodir})
+            assert(not ok and tostring(err):find('undodir', 1, true))
+            local original = vim.o.undodir
+            vim.o.undodir = require('fundo.config').archives_dir
+            local native = fn.undofile(FILE)
+            vim.cmd('wundo! ' .. fn.fnameescape(native))
+            local before = fn.readfile(native, 'b')
+            assert(not require('fundo.manager'):syncAllSync())
+            local removed = fundo.forget(FILE, {apply = true})
+            assert(not removed.applied and vim.deep_equal(before, fn.readfile(native, 'b')))
+            vim.o.undodir = original
+            vim.cmd('quitall!')
+        ]])
+    end)
+
     it('keeps relative archive paths fixed when the working directory changes.', function()
         local lines = run([[
             local root = vim.fn.fnamemodify(FILE, ':h')

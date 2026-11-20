@@ -203,6 +203,7 @@ end
 function Manager:scanArchivesDir()
     return async(function()
         log.debug('scanning archives dir:', self.archivesDir)
+        await(onMain(function() config.checkArchiveDir(self.archivesDir) end))
         local statTbl = await(self:listFileStats(self.archivesDir, 1024))
         local records = {}
         for name, stat in pairs(statTbl) do
@@ -506,6 +507,7 @@ function Manager:initialize()
         return self
     end
     self.archivesDir = path.normalize(config.archives_dir)
+    config.checkArchiveDir(self.archivesDir)
     self.limitArchivesSize = config.limit_archives_size
     self.retentionDays = config.retention_days
     self.prunePolicy = config.prune_policy

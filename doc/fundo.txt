@@ -61,7 +61,7 @@ Default configuration:                                 *nvim-fundo-default-confi
                                                         *fundo-archives_dir*
 `archives_dir`~
         Directory used to store fallback file-content archives and baseline
-        snapshots.
+        snapshots. Use a separate directory for Neovim's shared 'undodir'.
 
                                                         *fundo-limit_archives_size*
 `limit_archives_size`~

@@ -78,7 +78,8 @@ function M.forget(target, opts)
     for _, record in pairs(records) do
         if record.name == target or (project and record.name:sub(1, #prefix) == prefix) then
             local fallback = record.fallbackPath
-            record.paths = {fallback, fallback .. '.base', manifest.path(fallback)}
+            record.paths = {fallback .. '.base', manifest.path(fallback)}
+            if fallback ~= record.undoPath then table.insert(record.paths, 1, fallback) end
             record.bytes = storage.size(fallback) + (record.journalBytes or 0)
             for _, filename in ipairs(record.paths) do record.bytes = record.bytes + ((fs.statSync(filename) or {}).size or 0) end
             record.token = storage.revision(fallback)

@@ -32,6 +32,7 @@ local def = {
 
 ---@class FundoConfigModule: FundoConfig
 ---@field reload fun()
+---@field checkArchiveDir fun(dir: string)
 local Config
 local defaultBaselineMaxFileSize = 8
 local loggingLevels = {trace = true, debug = true, info = true, warn = true, error = true}
@@ -58,6 +59,18 @@ local function validateLogging(logging)
     logging.level = logging.level:lower()
     if not loggingLevels[logging.level] then
         error(('logging.level must be one of: trace, debug, info, warn, error; got %s'):format(logging.level), 3)
+    end
+end
+
+local function checkArchiveDir(dir)
+    local function resolved(directory)
+        return vim.fs.normalize(vim.fn.resolve(vim.fn.fnamemodify(directory, ':p')))
+    end
+    local archive = resolved(dir)
+    for _, directory in ipairs(vim.opt.undodir:get()) do
+        if directory ~= '.' and directory ~= '' and resolved(directory) == archive then
+            error('archives_dir must be separate from the shared undodir: ' .. dir, 0)
+        end
     end
 end
 
@@ -106,6 +119,7 @@ local function reload()
     if archivesDir ~= path.sep and not archivesDir:match('^%a:' .. path.sep .. '$') then
         archivesDir = archivesDir:gsub(path.sep .. '+$', '')
     end
+    checkArchiveDir(archivesDir)
     Config.archives_dir = archivesDir
     Config.limit_archives_size = resolved.limit_archives_size
     Config.baseline_max_file_size = resolved.baseline_max_file_size
@@ -134,7 +148,8 @@ Config = {
     track_on = def.track_on,
     checkpoint = vim.deepcopy(def.checkpoint),
     logging = vim.deepcopy(def.logging),
-    reload = reload
+    reload = reload,
+    checkArchiveDir = checkArchiveDir,
 }
 
 Config.reload()

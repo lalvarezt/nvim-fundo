@@ -198,6 +198,7 @@ local function withDirectoryLock(dir, callback)
 end
 
 function M.withLock(fallbackPath, callback)
+    require('fundo.config').checkArchiveDir(path.dirname(fallbackPath))
     return withDirectoryLock(M.directory(fallbackPath), callback)
 end
 

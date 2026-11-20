@@ -436,6 +436,7 @@ function Undo:saveBaseline(snapshot)
         if selected or storage.token(self.fallbackPath) then
             self.generation = storage.publish(transfer, persist)
         else
+            config.checkArchiveDir(path.dirname(self.fallbackPath))
             persist()
         end
         if snapshot then snapshot.generation = self.generation end
@@ -531,6 +532,8 @@ function Undo.completePendingTransferSync(transfer)
     local ok, err = pcall(function()
         journal.write(transfer)
         stage = 'fallback'
+        assert(path.normalize(transfer.fallbackPath) ~= path.normalize(transfer.undoPath),
+            'archive would overwrite the native undo file')
         local record = manifest.read(manifest.path(transfer.fallbackPath), transfer.fallbackPath)
         assert(not record or path.normalize(record.source.path) == path.normalize(transfer.name), 'archive source mismatch')
         local limit = config.baseline_max_file_size * 1024 * 1024
