@@ -351,9 +351,17 @@ describe('closed Neovim sessions.', function()
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
             assert(require('fundo.manager'):syncAllSync())
             vim.api.nvim_buf_set_lines(0, 0, 1, false, {'saved'})
+            local fs = require('fundo.fs')
+            local write, fallback = fs.writeFileSync, require('fundo').status().fallback.path
+            fs.writeFileSync = function(target, ...)
+                if target == fallback then error('archive unavailable at write') end
+                return write(target, ...)
+            end
             vim.cmd('write')
+            fs.writeFileSync = write
             vim.fn.writefile({'external'}, FILE)
             vim.cmd('checktime')
+            assert(require('fundo.manager'):syncAllSync())
             local current = BufferText()
             vim.cmd('undo')
             local saved = BufferText()

@@ -33,11 +33,12 @@ describe('durable pending recovery.', function()
         assert(not require('fundo.manager'):syncAllSync())
     ]]
 
-    for _, event in ipairs({'unload', 'exit'}) do
+    for _, event in ipairs({'unload', 'unreadable pointer', 'exit'}) do
         it('recovers an unsaved edit after an archive outage and ' .. event .. '.', function()
             local reopen = [[
                 vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
                 local text = BufferText()
+                if RestoreArchive then RestoreArchive() end
                 assert(require('fundo.manager'):syncAllSync())
                 vim.cmd('undo')
                 WriteReport({text, BufferText()})
@@ -47,6 +48,14 @@ describe('durable pending recovery.', function()
             if event == 'exit' then
                 run(firstDraft .. [[vim.cmd('quitall!')]])
                 result = run(reopen)
+            elseif event == 'unreadable pointer' then
+                result = run(firstDraft .. [[
+                    vim.cmd('bwipeout!')
+                    local storage = require('fundo.storage')
+                    local token = storage.token
+                    storage.token = function() error('pointer unavailable') end
+                    function RestoreArchive() storage.token, fs.writeFileSync = token, write end
+                ]] .. reopen)
             else
                 result = run(firstDraft .. [[
                     vim.cmd('bwipeout!')
@@ -56,6 +65,32 @@ describe('durable pending recovery.', function()
             assert.same({'saved', 'unsaved work'}, result)
         end)
     end
+
+    it('replays drafts in capture order when their journals were written in reverse.', function()
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            local u = require('fundo.manager'):get(vim.api.nvim_get_current_buf())
+            local journal = require('fundo.journal')
+            local second = os.time()
+            os.time = function() return second end
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'older'})
+            local older = u:transferSnapshot()
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'newer'})
+            local newer = u:transferSnapshot()
+            journal.write(newer)
+            journal.write(older)
+            require('fundo.storage').retain(older, newer)
+            os.exit(0)
+        ]])
+        local result = run([[
+            local manager = require('fundo.manager')
+            local pending = vim.tbl_values(manager.pendingTransfers)[1]
+            assert(manager:syncAllSync())
+            WriteReport({(require('fundo.storage').read(pending.fallbackPath).contents:gsub('\n$', ''))})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'newer'}, result)
+    end)
 
     it('journals new edits when an archive outage continues after restart.', function()
         run(firstDraft .. [[vim.cmd('quitall!')]])

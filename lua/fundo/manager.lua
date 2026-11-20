@@ -112,6 +112,7 @@ function Manager:trackingReason(bufnr, trigger)
     if undoPath ~= '' then
         local fallback = undo.archivePath(name, undoPath, self.archivesDir)
         local pending = self.pendingTransfers and self.pendingTransfers[fallback]
+            or self.captureFailures and self.captureFailures[fallback]
         if pending and path.normalize(pending.name) == name then return end
         if fs.statSync(fallback) or fs.statSync(fallback .. '.base')
             or fs.statSync(path.join(storage.directory(fallback), 'current')) then return end
@@ -142,11 +143,18 @@ end
 
 function Manager:attach(bufnr, trigger)
     if not self.undos[bufnr] then
-        if self:trackingReason(bufnr, trigger) then return end
+        local reason = self:trackingReason(bufnr, trigger)
+        if reason then
+            if trigger == 'read' and (reason == 'awaiting-manual' or reason == 'awaiting-write') then
+                local probe = undo:new(bufnr, self.archivesDir)
+                if probe:attach() then probe:discardForeignNative() end
+            end
+            return
+        end
         local u = undo:new(bufnr, self.archivesDir)
         if u:attach() then
             local pending = self.pendingTransfers[u.fallbackPath]
-            if pending and pending.expectedGeneration ~= u.generation then
+            if pending and u.generation and pending.expectedGeneration ~= u.generation then
                 -- A newer session owns the pointer. Keep the stale draft for :FundoRecover.
                 local saved, err = pcall(journal.write, pending)
                 if not saved then
@@ -368,6 +376,16 @@ local function canReplay(transfer)
     return undo:new(bufnr):canPersist()
 end
 
+local function replay(transfer)
+    if fn.undofile(transfer.name) ~= transfer.undoPath then
+        -- Keep the original pair recoverable until its destination is available.
+        journal.write(transfer)
+        return false
+    end
+    undo.completePendingTransferSync(transfer)
+    return true
+end
+
 function Manager:syncAll(block)
     return self.mutex:use(function()
         return async(function()
@@ -398,8 +416,7 @@ function Manager:syncAll(block)
                 if not activePaths[key] then
                     tasks['pending:' .. pendingKey] = onMain(function()
                         if self.pendingTransfers[pendingKey] ~= transfer or not canReplay(transfer) then return end
-                        undo.completePendingTransferSync(transfer)
-                        if self.pendingTransfers[pendingKey] == transfer then
+                        if replay(transfer) and self.pendingTransfers[pendingKey] == transfer then
                             self.pendingTransfers[pendingKey] = nil
                         end
                     end)
@@ -454,8 +471,7 @@ function Manager:syncAllSync()
     local failures = {}
     for bufnr, u in pairs(self.undos) do
         local ok, err = pcall(function()
-            if u:shouldTransfer() then
-                u:transferSync()
+            if u:transferSync() then
                 self.pendingTransfers[u.fallbackPath] = nil
                 self:finishCapture(u)
             end
@@ -480,7 +496,8 @@ function Manager:syncAllSync()
         if recovering then
             err = 'pending snapshot still requires recovery into its buffer'
         else
-            ok, err = pcall(undo.completePendingTransferSync, transfer)
+            ok, err = pcall(replay, transfer)
+            if ok and not err then goto continue end
         end
         if ok then
             self.pendingTransfers[key] = nil
@@ -529,7 +546,7 @@ function Manager:initialize()
         local ok, token = pcall(storage.token, record.fallbackPath)
         if record.textOnly then
             self.captureFailures[record.fallbackPath] = self.captureFailures[record.fallbackPath] or record
-        elseif ok and token == record.expectedGeneration and not self.pendingTransfers[record.fallbackPath] then
+        elseif (not ok or not token or token == record.expectedGeneration) and not self.pendingTransfers[record.fallbackPath] then
             self.pendingTransfers[record.fallbackPath] = record
         end
     end
@@ -569,7 +586,7 @@ function Manager:initialize()
         logBufferEvent('BufReadPost', bufnr)
         local read = {winid = api.nvim_get_current_win()}
         reads[bufnr] = read
-        local u = self:attach(bufnr)
+        local u = self:attach(bufnr, 'read')
         if u then u:discardForeignNative() end
         -- A failed native undo read can abort before Neovim applies modelines.
         vim.schedule(function()
@@ -680,7 +697,7 @@ function Manager:initialize()
     for _, bufnr in ipairs(api.nvim_list_bufs()) do
         if api.nvim_buf_is_loaded(bufnr) then
             loaded = loaded + 1
-            local u = self:attach(bufnr)
+            local u = self:attach(bufnr, 'read')
             if u then
                 attached = attached + 1
                 u:discardForeignNative()

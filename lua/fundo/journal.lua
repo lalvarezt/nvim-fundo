@@ -3,6 +3,11 @@ local fs = require('fundo.fs')
 local path = require('fundo.fs.path')
 local M = {}
 
+function M.captureTime()
+    local seconds, microseconds = uv.gettimeofday()
+    return seconds + microseconds / 1000000
+end
+
 function M.directory(archivesDir)
     return path.join(fn.stdpath('state'), 'fundo-journal', fn.sha256(path.normalize(archivesDir)))
 end
@@ -35,7 +40,7 @@ function M.refresh(transfer)
     for _, field in ipairs({'contents', 'undoContents'}) do
         if transfer[field] then record.files[field] = {size = #transfer[field], hash = fn.sha256(transfer[field])} end
     end
-    fs.writeFileSync(path.join(transfer.journalPath, 'record'), fn.json_encode(record))
+    fs.writeFileSync(path.join(transfer.journalPath, 'record'), vim.json.encode(record))
 end
 
 function M.write(transfer)

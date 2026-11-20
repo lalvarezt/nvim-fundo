@@ -256,7 +256,7 @@ local function writeGeneration(transfer, owner)
             record.files[field] = {size = #data, hash = fn.sha256(data)}
         end
     end
-    fs.writeFileSync(path.join(dir, 'record'), fn.json_encode(record))
+    fs.writeFileSync(path.join(dir, 'record'), vim.json.encode(record))
     return id
 end
 

@@ -396,7 +396,7 @@ function Undo:saveBaseline(snapshot)
     local transfer = {
         baselineOnly = true, name = self.name, undoPath = self.undoPath,
         fallbackPath = self.fallbackPath, baselinePath = self.baselinePath, contents = contents,
-        capturedAt = snapshot and snapshot.capturedAt or os.time(),
+        capturedAt = snapshot and snapshot.capturedAt or journal.captureTime(),
         expectedGeneration = snapshot and snapshot.expectedGeneration or self.generation or false,
         createdGenerations = snapshot and snapshot.createdGenerations or self.createdGenerations,
     }
@@ -475,7 +475,7 @@ function Undo:queueBaseline()
         fallbackPath = self.fallbackPath,
         baselinePath = self.baselinePath,
         contents = bufferContents(self.bufnr),
-        capturedAt = os.time(),
+        capturedAt = journal.captureTime(),
         expectedGeneration = self.generation,
         changedtick = api.nvim_buf_get_changedtick(self.bufnr),
     }
@@ -568,7 +568,7 @@ function Undo:textSnapshot()
     return {
         name = self.name, undoPath = self.undoPath, fallbackPath = self.fallbackPath,
         baselinePath = self.baselinePath, contents = bufferContents(self.bufnr),
-        snapshot_format = 'buffer-lines-v1', baseline_format = 'buffer-lines-v1', capturedAt = os.time(),
+        snapshot_format = 'buffer-lines-v1', baseline_format = 'buffer-lines-v1', capturedAt = journal.captureTime(),
         expectedGeneration = self.pendingTransfer and self.pendingTransfer.expectedGeneration or self.generation,
         createdGenerations = self.pendingTransfer and self.pendingTransfer.createdGenerations or self.createdGenerations,
         changedtick = api.nvim_buf_get_changedtick(self.bufnr),
@@ -903,6 +903,7 @@ function Undo:loadFallBack(transfer, legacyLines)
         loaded, reason = self:loadFileAndUndo(preferredWinid, transfer, legacyLines)
     end
     if loaded then
+        self.unmatchedNative = nil
         -- The buffer now contains the externally changed file with the restored
         -- undo tree. Persist that repaired pair before another external edit can
         -- make the native undo file invalid again.
@@ -1012,6 +1013,7 @@ function Undo:transferSync()
     self:refreshUndoPath()
     if not preserveRecovery and self:isEmpty() then
         local snapshot = self.pendingTransfer
+        if self.unmatchedNative == self.undoPath and fs.statSync(self.undoPath) then return end
         if not (snapshot and snapshot.baselineOnly)
             and (vim.bo[self.bufnr].modified or not vim.bo[self.bufnr].modifiable) then return end
         local _, err = self:saveBaseline(snapshot and snapshot.baselineOnly and snapshot or nil)
@@ -1111,6 +1113,11 @@ function Undo:check()
         or not self:canPersist() or fn.undofile(self.name) == '' then
         return
     end
+    if not self.pendingRecovery and self.pendingTransfer and self.pendingTransfer.undoContents and self:isEmpty() then
+        -- A reload can discard the live tree after a write failed to publish.
+        self.pendingRecovery = self.pendingTransfer
+        self.pendingNativeSequence = utils.bufCall(self.bufnr, fn.undotree).seq_last
+    end
     if self.pendingRecovery then
         if self.recoveryCapture then return end
         if not self:isEmpty() then
@@ -1206,7 +1213,8 @@ function Undo:check()
     if not self.foreignNative and fs.statSync(self.undoPath) then
         -- A legacy baseline can still match the native tree when its fallback does not.
         local baseline = self:readBaseline()
-        if baseline then self:loadFallBack(nil, baseline) end
+        if baseline and self:loadFallBack(nil, baseline) then return end
+        self.unmatchedNative = self.undoPath
         return
     end
     if self:loadBaseline() then

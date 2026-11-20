@@ -25,7 +25,7 @@ describe('configured archive paths.', function()
         }).lines
     end
 
-    for _, scenario in ipairs({'edit', 'literal archive directory', 'enable', 'manual track'}) do
+    for _, scenario in ipairs({'edit', 'literal archive directory', 'enable', 'manual track', 'manual after edit'}) do
         it('rejects a matching colliding native undo tree on ' .. scenario .. '.', function()
             local lines = run(([=[
                 local fn, api = vim.fn, vim.api
@@ -46,18 +46,20 @@ describe('configured archive paths.', function()
                 local first = manager:get(api.nvim_get_current_buf()).fallbackPath
                 vim.cmd('bwipeout!')
                 if scenario == 'enable' then fundo.disable() end
-                if scenario == 'manual track' then require('fundo.config').track_on = 'manual' end
+                if scenario:match('^manual') then require('fundo.config').track_on = 'manual' end
                 vim.cmd('edit ' .. fn.fnameescape(nested))
                 if scenario == 'enable' then fundo.enable() end
-                if scenario == 'manual track' then vim.cmd('FundoTrack') end
+                if scenario == 'manual after edit' then api.nvim_buf_set_lines(0, 0, -1, false, {'local draft'}) end
+                if scenario:match('^manual') then vim.cmd('FundoTrack') end
                 local second = manager:get(api.nvim_get_current_buf()).fallbackPath
                 assert(manager:syncAllSync())
                 local stored = assert(require('fundo.storage').read(second))
                 vim.cmd('undo')
+                if scenario == 'manual after edit' then vim.cmd('undo') end
                 WriteReport({tostring(first ~= second), tostring(stored.baselineOnly), BufferText()})
                 vim.cmd('quitall!')
             ]=]):format(scenario))
-            assert.same({'true', 'true', 'percent draft'}, lines)
+            assert.same({'true', tostring(scenario ~= 'manual after edit'), 'percent draft'}, lines)
         end)
     end
 

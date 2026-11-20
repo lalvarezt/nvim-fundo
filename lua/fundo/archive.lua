@@ -248,7 +248,7 @@ function M.associate(oldPath, newPath)
         assert(loaded or (source.baselineOnly and source.contents == currentText), reason or 'source history could not be loaded')
         if u:isEmpty() then
             return {baselineOnly = true, name = newPath, undoPath = undoPath, fallbackPath = fallback,
-                baselinePath = fallback .. '.base', contents = currentText, capturedAt = os.time()}
+                baselinePath = fallback .. '.base', contents = currentText, capturedAt = journal.captureTime()}
         end
         return u:transferSnapshot()
     end)

@@ -78,6 +78,10 @@ describe('undo directory changes.', function()
                     assert(manager:syncAllSync())
                     assert(manager.pendingTransfers[u.fallbackPath] and storage.revision(u.fallbackPath) == revision)
                     vim.go.undofile = true
+                    vim.o.undodir = '.'
+                    assert(manager:syncAllSync())
+                    assert(manager.pendingTransfers[u.fallbackPath] and #require('fundo').recovery_candidates(FILE) > 0)
+                    assert(vim.deep_equal(native, fn.readfile(u.undoPath, 'b')))
                     vim.o.undodir = oldDir
                     assert(manager:syncAllSync())
                     WriteReport({(storage.read(u.fallbackPath).contents:gsub('\n$', ''))})
