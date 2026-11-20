@@ -322,6 +322,11 @@ describe('recovery integrity.', function()
             fs.writeFileSync = write
             assert(not manager:syncAllSync())
             assert(vim.tbl_values(manager.pendingTransfers)[1] == pending)
+            local journaled = {}
+            for _, capture in ipairs(require('fundo.journal').list(manager.archivesDir, true)) do
+                journaled[capture.contents] = capture.undoContents ~= nil
+            end
+            assert(journaled['three\n'] and journaled['edit2\n'])
             local report = {BufferText()}
             vim.cmd('undo')
             table.insert(report, BufferText())

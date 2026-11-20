@@ -76,7 +76,7 @@ function Manager:detach(bufnr)
             self:finishCapture(u)
         else
             if u.pendingTransfer then
-                if ok and u.pendingTransfer.undoContents then u.pendingTransfer.recoverOnOpen = true end
+                if u.pendingTransfer.undoContents then u.pendingTransfer.recoverOnOpen = true end
                 self.pendingTransfers[u.pendingTransfer.fallbackPath] = u.pendingTransfer
             end
             if u.captureFailure then self.captureFailures[u.fallbackPath] = u.captureFailure end
@@ -150,9 +150,7 @@ function Manager:attach(bufnr, trigger)
                 u:reset(true)
                 if not vim.bo[bufnr].modified and (u:isEmpty() or pending.recoverOnOpen or pending.fromJournal) then
                     u.pendingRecovery = pending
-                    if pending.recoverOnOpen then
-                        u.pendingNativeSequence = utils.bufCall(bufnr, fn.undotree).seq_last
-                    end
+                u.pendingNativeSequence = utils.bufCall(bufnr, fn.undotree).seq_last
                 end
             end
             self.undos[bufnr] = u

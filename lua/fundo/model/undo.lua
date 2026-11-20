@@ -232,6 +232,11 @@ function Undo:refreshUndoPath()
         })
         replacement.supersededTransfers = vim.list_extend({}, pending.supersededTransfers or {})
         table.insert(replacement.supersededTransfers, pending)
+        if pending.journalPath then
+            replacement.journalPath = nil
+            replacement.supersededJournals = vim.list_extend({}, pending.supersededJournals or {})
+            table.insert(replacement.supersededJournals, pending.journalPath)
+        end
         if changedRecord then
             replacement.expectedGeneration = self.generation
             replacement.generation = nil
@@ -991,7 +996,7 @@ function Undo:transferSync()
         return
     end
     local pending = self.pendingRecovery
-    local preserveRecovery = pending and pending.recoverOnOpen and (self.recoveryCapture
+    local preserveRecovery = pending and (self.recoveryCapture
         or vim.bo[self.bufnr].modified or self.pendingNativeSequence ~= utils.bufCall(self.bufnr, fn.undotree).seq_last)
     if not preserveRecovery then self.recoveryCapture = nil end
     if pending and not preserveRecovery then
@@ -1024,9 +1029,9 @@ function Undo:transferSync()
             self:recordCaptureFailure(transfer)
             error(transfer, 0)
         end
-        if previous and previous == self.recoveryCapture and previous.undoPath == transfer.undoPath
+        if previous and previous.undoPath == transfer.undoPath
             and previous.contents == transfer.contents and previous.undoContents == transfer.undoContents then
-            -- Unloading can change the tick while leaving the snapshot intact.
+            -- Reuse the durable copy when a retry captures the same text and undo.
             previous.changedtick = transfer.changedtick
             transfer = previous
         elseif previous then
@@ -1043,6 +1048,8 @@ function Undo:transferSync()
         journal.write(transfer)
         if not pending.retainedRecovery then
             journal.write(pending)
+            -- Keep both histories available when the pending undo could not load.
+            if self.lastError and self.lastError.stage == 'undo' then error(self.lastError.message, 0) end
             pending.retainedRecovery = storage.retain(pending)
         end
         journal.finish(pending)
@@ -1098,8 +1105,7 @@ function Undo:check()
     if self.pendingRecovery then
         if self.recoveryCapture then return end
         if not self:isEmpty() then
-            if not self.pendingRecovery.fromJournal
-                and self.pendingNativeSequence ~= utils.bufCall(self.bufnr, fn.undotree).seq_last then
+            if self.pendingNativeSequence ~= utils.bufCall(self.bufnr, fn.undotree).seq_last then
                 self.lastError = transferError('undo', 'pending recovery would replace newer undo history')
                 return
             end
