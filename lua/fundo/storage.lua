@@ -2,6 +2,7 @@ local uv = vim.loop
 local fn = vim.fn
 local fs = require('fundo.fs')
 local path = require('fundo.fs.path')
+local journal = require('fundo.journal')
 
 local M = {}
 local directoryMode = 448
@@ -235,6 +236,11 @@ local function writeGeneration(transfer, owner)
     local id = ('%d-%.0f'):format(uv.os_getpid(), uv.hrtime())
     owner.createdGenerations = owner.createdGenerations or {}
     table.insert(owner.createdGenerations, id)
+    if not owner.expectedGeneration and owner.journalPath then
+        -- A first publication has no pointer. Its retry must recognize this
+        -- directory even if Neovim exits before the pointer is written.
+        journal.refresh(owner)
+    end
     local dir = path.join(M.directory(transfer.fallbackPath), id)
     fs.mkdirpSync(dir, directoryMode)
     local record = {
@@ -253,9 +259,9 @@ local function writeGeneration(transfer, owner)
     return id
 end
 
-function M.retain(transfer)
+function M.retain(transfer, owner)
     return M.withLock(transfer.fallbackPath, function()
-        local id = writeGeneration(transfer)
+        local id = writeGeneration(transfer, owner)
         fs.writeFileSync(path.join(M.directory(transfer.fallbackPath), id, 'retained'), 'competing undo history\n')
         return id
     end)

@@ -83,19 +83,21 @@ describe('undo directory changes.', function()
         end)
     end
 
-    for _, scenario in ipairs({'reopen', 'stalled recovery', 'stalled recovery before first commit'}) do
+    for _, scenario in ipairs({
+        'reopen', 'reopen before first commit', 'stalled recovery', 'stalled recovery before first commit',
+    }) do
         it('preserves detached undo on ' .. scenario .. '.', function()
             local result = session.run({tmpdir = dir, file = dir .. '/source.txt', undo_dir = dir .. '/undo',
                 archives_dir = dir .. '/archives', body = ([=[
                     local fn, api = vim.fn, vim.api
                     local manager, fs, storage = require('fundo.manager'), require('fundo.fs'), require('fundo.storage')
                     local scenario = %q
-                    local stalled = scenario ~= 'reopen'
+                    local stalled = scenario:match('^stalled') ~= nil
                     vim.cmd('edit ' .. fn.fnameescape(FILE))
                     api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
                     vim.cmd('write')
                     local fallback = manager:get(api.nvim_get_current_buf()).fallbackPath
-                    if scenario == 'stalled recovery before first commit' then
+                    if scenario:match('before first commit$') then
                         assert(not storage.token(fallback))
                     else
                         assert(manager:syncAllSync())
@@ -130,7 +132,7 @@ describe('undo directory changes.', function()
                     WriteReport({BufferText(), tostring(retained), tostring(manager.pendingTransfers[fallback] == nil)})
                     vim.cmd('quitall!')
                 ]=]):format(scenario)})
-            assert.same({scenario == 'reopen' and 'draft' or 'second draft', 'true', 'true'}, result.lines)
+            assert.same({scenario:match('^reopen') and 'draft' or 'second draft', 'true', 'true'}, result.lines)
         end)
     end
 

@@ -1103,7 +1103,9 @@ function Undo:check()
                 self.lastError = transferError('undo', 'pending recovery would replace newer undo history')
                 return
             end
-            local ok, err = pcall(function() storage.retain(self:transferSnapshot()) end)
+            local ok, err = pcall(function()
+                storage.retain(self:transferSnapshot(), self.pendingRecovery)
+            end)
             if not ok then self.lastError = transferError('generation', err); return end
         end
         local loaded, reason = self:loadFallBack(self.pendingRecovery)

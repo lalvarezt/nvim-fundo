@@ -59,6 +59,37 @@ describe('generation recovery across processes.', function()
         assert.same({'outside', 'uncommitted', 'committed', 'original'}, second)
     end)
 
+    it('replays the journal after an interrupted first publication.', function()
+        local first = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'first draft'})
+            local manager, storage = require('fundo.manager'), require('fundo.storage')
+            local fallback = manager:get(vim.api.nvim_get_current_buf()).fallbackPath
+            assert(not storage.token(fallback))
+            local pointer = storage.directory(fallback) .. '/current'
+            local fs = require('fundo.fs')
+            local write = fs.writeFileSync
+            fs.writeFileSync = function(target, ...)
+                if target == pointer then
+                    WriteReport({fallback})
+                    os.exit(0)
+                end
+                return write(target, ...)
+            end
+            manager:syncAllSync()
+            error('first publication did not reach the pointer')
+        ]])
+        local result = run(([[
+            local manager = require('fundo.manager')
+            assert(manager:syncAllSync())
+            local saved = assert(require('fundo.storage').read(%q))
+            WriteReport({saved.contents:gsub('\n$', ''), vim.fn.readfile(FILE)[1],
+                tostring(#require('fundo.journal').list(manager.archivesDir, true))})
+            vim.cmd('quitall!')
+        ]]):format(first[1]))
+        assert.same({'first draft', 'original', '0'}, result)
+    end)
+
     it('keeps another process newer history when an older buffer tries to sync.', function()
         local report = run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
