@@ -737,6 +737,7 @@ function Undo:loadBaseline(transfer)
                 error(baselineErr)
             end
             api.nvim_buf_set_lines(self.bufnr, 0, -1, false, currentLines)
+            cmd('let &l:undolevels = &l:undolevels')
         end)
         vim.bo[self.bufnr].modified = modified
         if view and utils.isWinValid(preferredWinid) then
@@ -762,7 +763,7 @@ function Undo:loadBaseline(transfer)
     return true
 end
 
-function Undo:loadFileAndUndo(winid, transfer)
+function Undo:loadFileAndUndo(winid, transfer, legacyLines)
     log.debug('loading fallback and undo:', 'fallback:', self.fallbackPath, 'undo:', self.undoPath, 'winid:', winid)
     local view
     if winid then
@@ -794,7 +795,7 @@ function Undo:loadFileAndUndo(winid, transfer)
             beforeLines = vim.split(transfer.contents, '\n', {plain = true})
             table.remove(beforeLines)
         else
-            beforeLines = self:readFallbackLines()
+            beforeLines = legacyLines or self:readFallbackLines()
         end
         local filename = temporary or self.undoPath
         missingUndo = not fs.statSync(filename)
@@ -867,7 +868,7 @@ function Undo:loadFileAndUndo(winid, transfer)
     return true
 end
 
-function Undo:loadFallBack(transfer)
+function Undo:loadFallBack(transfer, legacyLines)
     if transfer and path.normalize(transfer.name) ~= path.normalize(self.name) then
         return false, 'archive source mismatch'
     end
@@ -875,7 +876,7 @@ function Undo:loadFallBack(transfer)
         return self:loadBaseline(transfer)
     end
     if not transfer and self.foreignNative then return false, 'foreign-undo' end
-    if not transfer and not fs.statSync(self.fallbackPath) then
+    if not transfer and not legacyLines and not fs.statSync(self.fallbackPath) then
         log.trace('loadFallBack skipped; fallback missing:', self.fallbackPath)
         return false, 'missing-fallback'
     end
@@ -883,20 +884,20 @@ function Undo:loadFallBack(transfer)
     local reason
     local preferredWinid, winids = utils.getWinByBuf(self.bufnr)
     if preferredWinid == -1 then
-        loaded, reason = self:loadFileAndUndo(nil, transfer)
+        loaded, reason = self:loadFileAndUndo(nil, transfer, legacyLines)
     elseif winids then
         local views = {}
         for _, winid in ipairs(winids) do
             views[winid] = utils.saveView(winid)
         end
-        loaded, reason = self:loadFileAndUndo(preferredWinid, transfer)
+        loaded, reason = self:loadFileAndUndo(preferredWinid, transfer, legacyLines)
         for winid, view in pairs(views) do
             if utils.isWinValid(winid) then
                 pcall(utils.restView, winid, view)
             end
         end
     else
-        loaded, reason = self:loadFileAndUndo(preferredWinid, transfer)
+        loaded, reason = self:loadFileAndUndo(preferredWinid, transfer, legacyLines)
     end
     if loaded then
         -- The buffer now contains the externally changed file with the restored
@@ -1008,6 +1009,8 @@ function Undo:transferSync()
     self:refreshUndoPath()
     if not preserveRecovery and self:isEmpty() then
         local snapshot = self.pendingTransfer
+        if not (snapshot and snapshot.baselineOnly)
+            and (vim.bo[self.bufnr].modified or not vim.bo[self.bufnr].modifiable) then return end
         local _, err = self:saveBaseline(snapshot and snapshot.baselineOnly and snapshot or nil)
         if err then error(err, 0) end
         if snapshot and snapshot.baselineOnly then journal.finish(snapshot) end
@@ -1192,13 +1195,15 @@ function Undo:check()
         return
     end
     log.trace('check started:', self.bufnr, self.name or '')
-    local loaded, reason = self:loadFallBack()
+    local loaded = self:loadFallBack()
     if loaded then
         log.debug('check completed; fallback loaded:', self.bufnr, self.name or '')
         return
     end
-    if reason == 'missing-fallback' and fs.statSync(self.undoPath) then
-        log.debug('check completed; native undo exists and fallback is missing:', self.bufnr, self.name or '')
+    if not self.foreignNative and fs.statSync(self.undoPath) then
+        -- A legacy baseline can still match the native tree when its fallback does not.
+        local baseline = self:readBaseline()
+        if baseline then self:loadFallBack(nil, baseline) end
         return
     end
     if self:loadBaseline() then

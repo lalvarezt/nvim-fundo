@@ -120,6 +120,7 @@ function M.track(bufnr)
         manager.forgotten[name] = previousForgotten
         error('buffer is excluded by filter, undofile, or buffer type')
     end
+    u:discardForeignNative()
     u:check()
     u:reset(true)
     return true

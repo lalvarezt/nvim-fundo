@@ -140,9 +140,12 @@ local function sourceSnapshot(name)
     assert(err == 'missing', err)
     return withScratch(record, function(u, bufnr)
         if fs.statSync(record.fallbackPath) and fs.statSync(record.undoPath) then
+            vim.bo[bufnr].undolevels = -1
             api.nvim_buf_set_lines(bufnr, 0, -1, false, u:readFallbackLines())
+            vim.bo[bufnr].undolevels = 1000
             local loaded, failure = u:loadUndo()
             assert(loaded, failure)
+            assert(not u:isEmpty(), 'native undo does not match the legacy fallback')
             return u:transferSnapshot()
         end
         local baseline = u:readBaseline()

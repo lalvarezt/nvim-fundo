@@ -45,6 +45,31 @@ describe('baseline metadata policy.', function()
         end)
     end
 
+    it('keeps a baseline through an unmodifiable open and separates the first edit after recovery.', function()
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            assert(require('fundo.manager'):syncAllSync())
+            vim.cmd('quitall!')
+        ]])
+        fn.writefile({'outside'}, path.join(tmpdir, 'source.txt'))
+        run([[
+            vim.api.nvim_create_autocmd('BufReadPost', {callback = function() vim.bo.modifiable = false end})
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            assert(require('fundo.manager'):syncAllSync())
+            vim.cmd('quitall!')
+        ]])
+        local result = run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'local edit'})
+            vim.cmd('undo')
+            local disk = BufferText()
+            vim.cmd('undo')
+            WriteReport({disk, BufferText()})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'outside', 'original'}, result)
+    end)
+
     it('does not retain an opted-out opening snapshot across disable and enable.', function()
         local lines = run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))

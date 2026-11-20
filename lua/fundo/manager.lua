@@ -624,6 +624,16 @@ function Manager:initialize()
         local u = self:attach(bufnr, 'write')
         if u then
             u:reset(true)
+            -- Neovim can discard the live tree on the very next reload.
+            if vim.o.undoreload >= 0 and api.nvim_buf_line_count(bufnr) >= vim.o.undoreload then
+                local ok, saved = pcall(u.transferSync, u)
+                if ok and saved then
+                    self:finishCapture(u)
+                    self.pendingTransfers[u.fallbackPath] = nil
+                elseif not ok then
+                    vim.notify('Fundo could not archive the write: ' .. tostring(saved), vim.log.levels.WARN)
+                end
+            end
         end
     end, self.disposables)
     event:on('BufWipeout', function(bufnr)

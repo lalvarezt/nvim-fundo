@@ -25,7 +25,7 @@ describe('configured archive paths.', function()
         }).lines
     end
 
-    for _, scenario in ipairs({'edit', 'literal archive directory', 'enable'}) do
+    for _, scenario in ipairs({'edit', 'literal archive directory', 'enable', 'manual track'}) do
         it('rejects a matching colliding native undo tree on ' .. scenario .. '.', function()
             local lines = run(([=[
                 local fn, api = vim.fn, vim.api
@@ -46,8 +46,10 @@ describe('configured archive paths.', function()
                 local first = manager:get(api.nvim_get_current_buf()).fallbackPath
                 vim.cmd('bwipeout!')
                 if scenario == 'enable' then fundo.disable() end
+                if scenario == 'manual track' then require('fundo.config').track_on = 'manual' end
                 vim.cmd('edit ' .. fn.fnameescape(nested))
                 if scenario == 'enable' then fundo.enable() end
+                if scenario == 'manual track' then vim.cmd('FundoTrack') end
                 local second = manager:get(api.nvim_get_current_buf()).fallbackPath
                 assert(manager:syncAllSync())
                 local stored = assert(require('fundo.storage').read(second))

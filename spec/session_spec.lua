@@ -344,6 +344,26 @@ describe('closed Neovim sessions.', function()
         assert_linear_recovery('external|change')
     end)
 
+    it('keeps the last write when an immediate reload exceeds undoreload.', function()
+        fn.writefile({'one', 'two', 'three'}, file)
+        local result = run([[
+            vim.o.undoreload = 2
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            assert(require('fundo.manager'):syncAllSync())
+            vim.api.nvim_buf_set_lines(0, 0, 1, false, {'saved'})
+            vim.cmd('write')
+            vim.fn.writefile({'external'}, FILE)
+            vim.cmd('checktime')
+            local current = BufferText()
+            vim.cmd('undo')
+            local saved = BufferText()
+            vim.cmd('undo')
+            WriteReport({current, saved, BufferText()})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'external', 'saved|two|three', 'one|two|three'}, result.lines)
+    end)
+
     for _, reload in ipairs({'checktime', 'edit!'}) do
         it('persists native reload history after ' .. reload .. ' before a later external change.', function()
             fn.writefile({'one'}, file)

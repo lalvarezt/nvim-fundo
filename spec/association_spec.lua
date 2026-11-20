@@ -124,6 +124,24 @@ describe('explicit history association.', function()
         assert.same({'destination'}, result)
     end)
 
+    it('rejects legacy undo that does not match the archived text.', function()
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+            vim.cmd('write')
+            assert(require('fundo.manager'):syncAllSync())
+            local fallback = require('fundo').status().fallback.path
+            vim.cmd('bwipeout!')
+            require('fundo.storage').remove(fallback)
+            vim.fn.writefile({'mismatch'}, fallback)
+            vim.fn.writefile({'destination'}, MOVED)
+            vim.cmd('edit ' .. vim.fn.fnameescape(MOVED))
+            assert(not pcall(require('fundo').associate, FILE, MOVED))
+            assert(vim.fn.filereadable(vim.fn.undofile(MOVED)) == 0 and EntryCount() == 0)
+            vim.cmd('quitall!')
+        ]])
+    end)
+
     it('rejects dirty destinations and files excluded by the filter.', function()
         local result = run([[
             local fundo = require('fundo')
