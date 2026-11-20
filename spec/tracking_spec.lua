@@ -48,6 +48,25 @@ describe('tracking controls.', function()
         end)
     end
 
+    it('tracks a journal-only source on reopen under manual tracking.', function()
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'draft'})
+            require('fundo.storage').publish = function() error('archive unavailable') end
+            vim.cmd('quitall!')
+        ]])
+        local result = run([[
+            require('fundo.config').track_on = 'manual'
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            assert(require('fundo').status().tracked)
+            assert(require('fundo.manager'):syncAllSync())
+            vim.cmd('undo')
+            WriteReport({BufferText()})
+            vim.cmd('quitall!')
+        ]])
+        assert.same({'draft'}, result)
+    end)
+
     it('previews and forgets a file without deleting native undo or recapturing it.', function()
         local result = run([[
             local fundo = require('fundo')

@@ -74,6 +74,10 @@ describe('undo directory changes.', function()
                     assert(vim.deep_equal(native, fn.readfile(u.undoPath, 'b')))
                     vim.cmd('bwipeout!')
                     assert(manager.pendingTransfers[u.fallbackPath], 'wiping the opted-out buffer lost its pending save')
+                    vim.go.undofile = option ~= 'undofile'
+                    assert(manager:syncAllSync())
+                    assert(manager.pendingTransfers[u.fallbackPath] and storage.revision(u.fallbackPath) == revision)
+                    vim.go.undofile = true
                     vim.o.undodir = oldDir
                     assert(manager:syncAllSync())
                     WriteReport({(storage.read(u.fallbackPath).contents:gsub('\n$', ''))})
@@ -144,12 +148,15 @@ describe('undo directory changes.', function()
             vim.cmd('edit ' .. fn.fnameescape(FILE))
             api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
             vim.cmd('write')
-            assert(manager:syncAllSync())
+            local fallback = manager:get(api.nvim_get_current_buf()).fallbackPath
+            assert(not require('fundo.storage').token(fallback))
             api.nvim_buf_set_lines(0, 0, -1, false, {'first draft'})
             local write = fs.writeFileSync
             local archivePrefix = manager.archivesDir .. require('fundo.fs.path').sep
+            local blocked = false
             fs.writeFileSync = function(target, ...)
-                if vim.startswith(target, archivePrefix) then error('archive unavailable') end
+                if target == fallback then blocked = true end
+                if blocked and vim.startswith(target, archivePrefix) then error('archive unavailable') end
                 return write(target, ...)
             end
             assert(not manager:syncAllSync())
@@ -170,6 +177,8 @@ describe('undo directory changes.', function()
                 recovered[#recovered + 1] = (record.contents:gsub('\n$', ''))
             end
             table.sort(recovered)
+            assert(require('fundo.manager'):syncAllSync())
+            assert(require('fundo.storage').read(records[1].fallbackPath).contents == 'second draft\n')
             WriteReport(recovered)
             vim.cmd('quitall!')
         ]]

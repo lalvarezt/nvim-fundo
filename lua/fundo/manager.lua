@@ -111,6 +111,8 @@ function Manager:trackingReason(bufnr, trigger)
     local undoPath = fn.undofile(name)
     if undoPath ~= '' then
         local fallback = undo.archivePath(name, undoPath, self.archivesDir)
+        local pending = self.pendingTransfers and self.pendingTransfers[fallback]
+        if pending and path.normalize(pending.name) == name then return end
         if fs.statSync(fallback) or fs.statSync(fallback .. '.base')
             or fs.statSync(path.join(storage.directory(fallback), 'current')) then return end
     end
@@ -144,6 +146,16 @@ function Manager:attach(bufnr, trigger)
         local u = undo:new(bufnr, self.archivesDir)
         if u:attach() then
             local pending = self.pendingTransfers[u.fallbackPath]
+            if pending and pending.expectedGeneration ~= u.generation then
+                -- A newer session owns the pointer. Keep the stale draft for :FundoRecover.
+                local saved, err = pcall(journal.write, pending)
+                if not saved then
+                    pcall(log.warn, 'could not preserve conflicting draft:', pending.name, err)
+                    return
+                end
+                self.pendingTransfers[u.fallbackPath] = nil
+                pending = nil
+            end
             if pending and path.normalize(pending.name) == path.normalize(u.name) then
                 -- The buffer may have changed while Fundo was disabled. Capture
                 -- its current history before retrying the older detached copy.
@@ -347,9 +359,12 @@ function Manager:scanArchivesDir()
 end
 
 local function canReplay(transfer)
+    if fn.undofile(transfer.name) == '' then return false end
     local bufnr = fn.bufnr(transfer.name)
-    if bufnr < 0 or not api.nvim_buf_is_loaded(bufnr) then return true end
-    return undo:new(bufnr):canPersist() and fn.undofile(transfer.name) ~= ''
+    if bufnr < 0 or not api.nvim_buf_is_loaded(bufnr) then
+        return vim.go.undofile and vim.go.undolevels >= 0
+    end
+    return undo:new(bufnr):canPersist()
 end
 
 function Manager:syncAll(block)

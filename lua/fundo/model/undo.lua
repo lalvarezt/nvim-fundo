@@ -1045,17 +1045,20 @@ function Undo:transferSync()
     if preserveRecovery then
         -- Both drafts need a durable copy while archive writes are unavailable.
         self.recoveryCapture = transfer
+        local owner = pending
+        if not transfer.expectedGeneration and transfer.fallbackPath == pending.fallbackPath then
+            pending.createdGenerations = pending.createdGenerations or {}
+            transfer.createdGenerations = pending.createdGenerations
+            owner = transfer
+        end
         journal.write(transfer)
         if not pending.retainedRecovery then
             journal.write(pending)
             -- Keep both histories available when the pending undo could not load.
             if self.lastError and self.lastError.stage == 'undo' then error(self.lastError.message, 0) end
-            pending.retainedRecovery = storage.retain(pending)
+            pending.retainedRecovery = storage.retain(pending, owner)
         end
         journal.finish(pending)
-        if not transfer.expectedGeneration and transfer.fallbackPath == pending.fallbackPath then
-            transfer.createdGenerations = vim.list_extend(transfer.createdGenerations or {}, pending.createdGenerations)
-        end
         self.recoveryCapture = nil
         self.pendingRecovery = nil
         self.pendingNativeSequence = nil
