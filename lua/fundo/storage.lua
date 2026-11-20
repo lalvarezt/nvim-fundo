@@ -420,7 +420,7 @@ function M.records(archivesDir)
                     and path.dirname(record.fallbackPath) == archivesDir, 'generation identity mismatch')
                 return {
                     directory = dir,
-                    fallbackPath = record.fallbackPath, name = record.name,
+                        fallbackPath = record.fallbackPath, name = record.name, undoPath = record.undoPath,
                     token = pointer.current, size = M.size(record.fallbackPath),
                     previous = pointer.previous,
                     mtime = fs.statSync(path.join(dir, 'current')).mtime.sec,
@@ -437,7 +437,8 @@ function M.records(archivesDir)
                         local readable, record = pcall(readJson, path.join(dir, entry.name, 'record'))
                         if readable and type(record.fallbackPath) == 'string' and M.directory(record.fallbackPath) == dir
                             and path.dirname(record.fallbackPath) == archivesDir then
-                            diagnostic.fallbackPath, diagnostic.name = record.fallbackPath, record.name
+                                diagnostic.fallbackPath, diagnostic.name, diagnostic.undoPath =
+                                    record.fallbackPath, record.name, record.undoPath
                             break
                         end
                     end

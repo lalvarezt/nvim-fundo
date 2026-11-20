@@ -67,7 +67,8 @@ local function checkArchiveDir(dir)
         return vim.fs.normalize(vim.fn.resolve(vim.fn.fnamemodify(directory, ':p')))
     end
     local archive = resolved(dir)
-    for _, directory in ipairs(vim.opt.undodir:get()) do
+    for _, entry in ipairs(vim.fn.split(vim.o.undodir, [[\\\@<!,]])) do
+        local directory = entry:gsub('\\,', ',')
         if directory ~= '.' and directory ~= '' and resolved(directory) == archive then
             error('archives_dir must be separate from the shared undodir: ' .. dir, 0)
         end

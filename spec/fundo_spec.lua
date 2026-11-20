@@ -1422,22 +1422,20 @@ describe('fundo integration.', function()
 
     it('does not fail the prune scan when an archive cannot be removed.', function()
         local fs = require('fundo.fs')
-        local unlink = fs.unlink
+        local unlink = fs.unlinkSync
         local archive = path.join(archivesDir, 'stale')
 
         fn.writefile({'stale archive'}, archive)
         manager.prunePolicy = 'delete'
         manager.limitArchivesSize = 0
-        fs.unlink = function()
-            return promise.reject('unlink failed')
-        end
+        fs.unlinkSync = function() return nil, 'unlink failed', 'EACCES' end
 
         async(function()
             await(manager:scanArchivesDir())
             done()
         end)
         local ok, err = wait()
-        fs.unlink = unlink
+        fs.unlinkSync = unlink
 
         assert(ok, err)
     end)

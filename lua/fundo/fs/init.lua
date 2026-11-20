@@ -39,6 +39,22 @@ function FS.copyFileSync(path, newPath)
     end
 end
 
+function FS.unlinkArchiveSync(filename)
+    local fd, err, code = FS.openSync(filename, 'r', 0)
+    if not fd then
+        if code == 'ENOENT' then return false end
+        error(err)
+    end
+    -- An old overlapping layout can leave a native file after its metadata is gone.
+    local signature, readError = FS.readSync(fd, 9, 0)
+    FS.closeSync(fd)
+    assert(signature, readError)
+    if signature == 'Vim\159UnDo\229' then return false end
+    local removed, failure, removeCode = FS.unlinkSync(filename)
+    if not removed and removeCode ~= 'ENOENT' then error(failure) end
+    return removed == true
+end
+
 function FS.syncDirectorySync(dirpath)
     -- Windows does not expose directory fsync through libuv. File data is still
     -- synchronized there; durable directory publication requires Unix support.

@@ -20,9 +20,13 @@ end
 function M.records()
     local records = {}
     local unidentified = {}
+    local nativePaths = {}
     local function add(name, fallback, undoPath)
-        if name == '' then return end
-        records[fallback] = {name = path.normalize(name), fallbackPath = fallback, undoPath = undoPath}
+        if type(name) ~= 'string' or name == '' then return end
+        local current = fn.undofile(name)
+        nativePaths[current] = true
+        if undoPath then nativePaths[undoPath] = true end
+        records[fallback] = {name = path.normalize(name), fallbackPath = fallback, undoPath = undoPath or current}
     end
     for _, filename in ipairs(fn.glob(path.join(manifest.dir(config.archives_dir), '*.json'), false, true)) do
         local fallback = path.join(config.archives_dir, path.basename(filename):sub(1, -6))
@@ -32,7 +36,7 @@ function M.records()
     end
     for _, record in ipairs(storage.records(config.archives_dir)) do
         if record.fallbackPath then
-            add(record.name, record.fallbackPath, fn.undofile(record.name))
+            add(record.name, record.fallbackPath, record.undoPath)
         else
             table.insert(unidentified, record.directory)
         end
@@ -42,7 +46,7 @@ function M.records()
     for _, transfer in pairs(manager.pendingTransfers or {}) do
         add(transfer.name, transfer.fallbackPath, transfer.undoPath)
     end
-    return records, unidentified
+    return records, unidentified, nativePaths
 end
 
 function M.forget(target, opts)
@@ -53,8 +57,12 @@ function M.forget(target, opts)
     local stat = fs.statSync(target)
     local project = opts.project == true or (stat and stat.type == 'directory') or false
     local prefix = target:sub(-1) == path.sep and target or target .. path.sep
-    local records, unidentified = M.records()
-    for _, capture in ipairs(journal.list(config.archives_dir, true)) do
+    local records, unidentified, nativePaths = M.records()
+    local journals, damaged = journal.list(config.archives_dir, true)
+    for _, failure in ipairs(damaged) do table.insert(unidentified, failure.path) end
+    for _, capture in ipairs(journals) do
+        nativePaths[capture.undoPath] = true
+        nativePaths[fn.undofile(capture.name)] = true
         local fallback = capture.fallbackPath
         local record = records[fallback] or {name = path.normalize(capture.name), fallbackPath = fallback,
             undoPath = capture.undoPath}
@@ -66,6 +74,7 @@ function M.forget(target, opts)
     if not project then
         local undoPath = fn.undofile(target)
         if undoPath ~= '' then
+            nativePaths[undoPath] = true
             local fallback = undo.archivePath(target, undoPath, config.archives_dir)
             if fs.statSync(fallback) or fs.statSync(fallback .. '.base') or fs.statSync(manifest.path(fallback))
                 or fs.statSync(storage.directory(fallback)) then
@@ -78,8 +87,10 @@ function M.forget(target, opts)
     for _, record in pairs(records) do
         if record.name == target or (project and record.name:sub(1, #prefix) == prefix) then
             local fallback = record.fallbackPath
-            record.paths = {fallback .. '.base', manifest.path(fallback)}
-            if fallback ~= record.undoPath then table.insert(record.paths, 1, fallback) end
+            record.paths = {}
+            for _, filename in ipairs({fallback, fallback .. '.base', manifest.path(fallback)}) do
+                if not nativePaths[filename] then table.insert(record.paths, filename) end
+            end
             record.bytes = storage.size(fallback) + (record.journalBytes or 0)
             for _, filename in ipairs(record.paths) do record.bytes = record.bytes + ((fs.statSync(filename) or {}).size or 0) end
             record.token = storage.revision(fallback)
@@ -94,8 +105,7 @@ function M.forget(target, opts)
         local ok, err = pcall(storage.withLock, record.fallbackPath, function()
             assert(storage.revision(record.fallbackPath) == record.token, 'archive changed after removal preview')
             for _, filename in ipairs(record.paths) do
-                local removed, failure, code = fs.unlinkSync(filename)
-                if not removed and code ~= 'ENOENT' then error(failure) end
+                fs.unlinkArchiveSync(filename)
             end
             storage.remove(record.fallbackPath)
         end)

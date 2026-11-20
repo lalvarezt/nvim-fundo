@@ -266,8 +266,10 @@ function Manager:scanArchivesDir()
             if stat then
                 local p = stat.path or path.join(self.archivesDir, stat.name)
                 log.debug('archive will be pruned:', p, 'size:', stat.size)
-                tasks[p] = fs.unlink(p)
-                removed = removed + 1
+                tasks[p] = onMain(function()
+                    config.checkArchiveDir(self.archivesDir)
+                    if fs.unlinkArchiveSync(p) then removed = removed + 1 end
+                end)
             end
         end
         local cutoff = self.retentionDays and os.time() - self.retentionDays * 24 * 60 * 60 or nil
@@ -325,8 +327,7 @@ function Manager:scanArchivesDir()
                             for _, artifact in ipairs({record.fallback or false, record.baseline or false, record.manifest or false}) do
                                 if artifact then
                                     local target = artifact.path or path.join(self.archivesDir, artifact.name)
-                                    local deleted, failure, code = fs.unlinkSync(target)
-                                    if not deleted and code ~= 'ENOENT' then error(failure) end
+                                    fs.unlinkArchiveSync(target)
                                 end
                             end
                             storage.remove(fallbackPath)
@@ -546,7 +547,7 @@ function Manager:initialize()
         local ok, token = pcall(storage.token, record.fallbackPath)
         if record.textOnly then
             self.captureFailures[record.fallbackPath] = self.captureFailures[record.fallbackPath] or record
-        elseif (not ok or not token or token == record.expectedGeneration) and not self.pendingTransfers[record.fallbackPath] then
+        elseif ok and token == record.expectedGeneration and not self.pendingTransfers[record.fallbackPath] then
             self.pendingTransfers[record.fallbackPath] = record
         end
     end

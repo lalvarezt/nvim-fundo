@@ -85,6 +85,76 @@ describe('configured archive paths.', function()
         ]])
     end)
 
+    it('recognizes an escaped comma in a shared undodir.', function()
+        run([[
+            local dir = vim.fn.fnamemodify(FILE, ':h') .. '/arc,old'
+            vim.fn.mkdir(dir, 'p')
+            vim.o.undodir = vim.fn.escape(dir, ',')
+            assert(vim.fn.fnamemodify(vim.fn.undofile(FILE), ':h') == dir)
+            local ok, err = pcall(require('fundo').setup, {archives_dir = dir})
+            assert(not ok and tostring(err):find('undodir', 1, true))
+            vim.cmd('quitall!')
+        ]])
+    end)
+
+    it('keeps the recorded native undo after upgrading an overlapping layout.', function()
+        run([[
+            local fn, manager = vim.fn, require('fundo.manager')
+            vim.cmd('edit ' .. fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+            vim.cmd('write')
+            local u = manager:get(vim.api.nvim_get_current_buf())
+            local old = u:transferSnapshot()
+            vim.cmd('bwipeout!')
+            local storage = require('fundo.storage')
+            old.expectedGeneration = storage.token(old.fallbackPath)
+            old.undoPath = old.fallbackPath
+            storage.publish(old, function()
+                require('fundo.fs').writeFileSync(old.undoPath, old.undoContents)
+                require('fundo.manifest').write(old)
+            end)
+            local before = fn.readfile(old.undoPath, 'b')
+            assert(require('fundo').forget(FILE, {apply = true}).applied)
+            assert(vim.deep_equal(before, fn.readfile(old.undoPath, 'b')))
+            manager.prunePolicy, manager.limitArchivesSize = 'delete', 0
+            local done = false
+            manager:scanArchivesDir():thenCall(function() done = true end)
+            assert(vim.wait(2000, function() return done end))
+            assert(vim.deep_equal(before, fn.readfile(old.undoPath, 'b')))
+            vim.cmd('quitall!')
+        ]])
+    end)
+
+    it('checks the live undodir before deleting flat files during a prune scan.', function()
+        run([[
+            local manager, fn = require('fundo.manager'), vim.fn
+            manager.prunePolicy, manager.limitArchivesSize = 'delete', 0
+            require('fundo.config').track_on = 'manual'
+            vim.cmd('edit ' .. fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'local draft'})
+            local list = manager.listFileStats
+            local native, before
+            manager.listFileStats = function(self, dir, size)
+                manager.listFileStats = list
+                return require('promise')(function(resolve, reject)
+                    vim.schedule(function()
+                        vim.o.undodir = self.archivesDir
+                        native = fn.undofile(FILE)
+                        vim.cmd('wundo! ' .. fn.fnameescape(native))
+                        before = fn.readfile(native, 'b')
+                        list(self, dir, size):thenCall(resolve, reject)
+                    end)
+                end)
+            end
+            local done = false
+            local function finish() done = true end
+            manager:scanArchivesDir():thenCall(finish, finish)
+            assert(vim.wait(2000, function() return done end))
+            assert(native and vim.deep_equal(before, fn.readfile(native, 'b')))
+            vim.cmd('quitall!')
+        ]])
+    end)
+
     it('keeps relative archive paths fixed when the working directory changes.', function()
         local lines = run([[
             local root = vim.fn.fnamemodify(FILE, ':h')
