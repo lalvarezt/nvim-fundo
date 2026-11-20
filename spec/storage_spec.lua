@@ -56,6 +56,18 @@ describe('generation storage.', function()
         assert.equal('second\n', storage.restorePointer(fallback, second.generation, false).contents)
     end)
 
+    it('keeps recoverable generations when the selected generation is missing.', function()
+        local kept = publish('recover me')
+        fn.writefile({fn.json_encode({version = 1, current = '1-2'})}, storage.directory(fallback) .. '/current')
+        local config = require('fundo.config')
+        local old = config.prune_policy
+        config.prune_policy = 'delete'
+        local ok, err = pcall(storage.clean, dir)
+        config.prune_policy = old
+        assert(ok, err)
+        assert.equal('recover me\n', storage.restorePointer(fallback, kept.generation, storage.revision(fallback)).contents)
+    end)
+
     it('keeps the last committed generation when publication is interrupted.', function()
         local first = publish('first')
         local nextSnapshot = snapshot('second', first.generation)

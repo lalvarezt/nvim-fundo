@@ -474,7 +474,12 @@ function M.clean(archivesDir)
                     return
                 end
                 local pointer = readJson(path.join(dir, 'current'))
-                if not idValid(pointer.current) then return end
+                if pointer.version ~= 1 or not idValid(pointer.current)
+                    or (pointer.previous ~= nil and not idValid(pointer.previous)) then return end
+                local record = readJson(path.join(dir, pointer.current, 'record'))
+                if type(record.fallbackPath) ~= 'string' or path.dirname(record.fallbackPath) ~= archivesDir
+                    or M.directory(record.fallbackPath) ~= dir then return end
+                readGeneration(record.fallbackPath, pointer.current)
                 for _, entry in ipairs(entries(dir)) do
                     if entry.name ~= 'current' and entry.name ~= pointer.current and entry.name ~= pointer.previous then
                         fn.delete(path.join(dir, entry.name), 'rf')

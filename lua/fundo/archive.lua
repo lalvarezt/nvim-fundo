@@ -6,6 +6,8 @@ local path = require('fundo.fs.path')
 local manifest = require('fundo.manifest')
 local storage = require('fundo.storage')
 local undo = require('fundo.model.undo')
+local utils = require('fundo.utils')
+local journal = require('fundo.journal')
 
 local M = {}
 
@@ -52,6 +54,15 @@ function M.forget(target, opts)
     local project = opts.project == true or (stat and stat.type == 'directory') or false
     local prefix = target:sub(-1) == path.sep and target or target .. path.sep
     local records, unidentified = M.records()
+    for _, capture in ipairs(journal.list(config.archives_dir, true)) do
+        local fallback = capture.fallbackPath
+        local record = records[fallback] or {name = path.normalize(capture.name), fallbackPath = fallback,
+            undoPath = capture.undoPath}
+        records[fallback] = record
+        local metadata = fs.statSync(path.join(capture.journalPath, 'record'))
+        record.journalBytes = (record.journalBytes or 0) + #capture.contents + #(capture.undoContents or '')
+            + (metadata and metadata.size or 0)
+    end
     if not project then
         local undoPath = fn.undofile(target)
         if undoPath ~= '' then
@@ -68,7 +79,7 @@ function M.forget(target, opts)
         if record.name == target or (project and record.name:sub(1, #prefix) == prefix) then
             local fallback = record.fallbackPath
             record.paths = {fallback, fallback .. '.base', manifest.path(fallback)}
-            record.bytes = storage.size(fallback)
+            record.bytes = storage.size(fallback) + (record.journalBytes or 0)
             for _, filename in ipairs(record.paths) do record.bytes = record.bytes + ((fs.statSync(filename) or {}).size or 0) end
             record.token = storage.revision(fallback)
             result.bytes = result.bytes + record.bytes
@@ -158,7 +169,7 @@ function M.associationCandidates(newPath)
     newPath = newPath or api.nvim_buf_get_name(0)
     if newPath == '' then return {} end
     newPath = normalize(newPath)
-    local bufnr = fn.bufnr(newPath)
+    local bufnr = utils.bufnrForPath(newPath)
     if bufnr < 0 or not api.nvim_buf_is_loaded(bufnr) or vim.bo[bufnr].modified then return {} end
     local current = fs.statSync(newPath)
     if not current or not current.ino or current.ino == 0 or not current.birthtime
@@ -189,14 +200,14 @@ function M.associate(oldPath, newPath)
     assert(type(newPath) == 'string' and newPath ~= '', 'association requires a named destination')
     newPath = normalize(newPath)
     assert(oldPath ~= newPath, 'source and destination paths must differ')
-    local bufnr = fn.bufnr(newPath)
+    local bufnr = utils.bufnrForPath(newPath)
     assert(bufnr >= 0 and api.nvim_buf_is_loaded(bufnr), 'open the destination file before associating history')
     local eligibility = undo:new(bufnr, config.archives_dir):baselineEligibility()
     assert(eligibility == 'eligible' or eligibility == 'baseline-disabled' or eligibility == 'oversized',
         'destination is ineligible: ' .. eligibility)
     assert(config.filter(newPath, bufnr) == true, 'destination is excluded by filter')
     assert(vim.bo[bufnr].buftype == '', 'destination must be a regular file buffer')
-    local tree = require('fundo.utils').bufCall(bufnr, fn.undotree)
+    local tree = utils.bufCall(bufnr, fn.undotree)
     assert(#tree.entries == 0, 'destination already has undo history; both histories were kept')
     local undoPath = fn.undofile(newPath)
     assert(undoPath ~= '', 'destination has no usable undo path')

@@ -28,6 +28,17 @@ M.isWindows = (function()
 end)()
 
 ---
+---@param name string
+---@return number
+function M.bufnrForPath(name)
+    local normalize = require('fundo.fs.path').normalize
+    name = normalize(name)
+    for _, bufnr in ipairs(api.nvim_list_bufs()) do
+        if normalize(api.nvim_buf_get_name(bufnr)) == name then return bufnr end
+    end
+    return -1
+end
+
 ---@return string
 function M.mode()
     return api.nvim_get_mode().mode

@@ -85,7 +85,7 @@ function M.repair(id, target)
     assert(capture.kind == 'generation', 'pointer repair requires a generation; open journals with :FundoRecover')
     local revision = storage.revision(fallback)
     local manager = require('fundo.manager')
-    local buffer = fn.bufnr(name)
+    local buffer = require('fundo.utils').bufnrForPath(name)
     local tracked = manager.undos and manager.undos[buffer]
     if buffer >= 0 and api.nvim_buf_is_loaded(buffer) then
         assert(not vim.bo[buffer].modified, 'save or inspect the modified buffer before choosing archive history')

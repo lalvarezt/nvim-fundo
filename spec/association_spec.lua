@@ -124,6 +124,20 @@ describe('explicit history association.', function()
         assert.same({'destination'}, result)
     end)
 
+    it('requires the exact destination buffer before publishing an association.', function()
+        run([[
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'saved'})
+            assert(require('fundo.manager'):syncAllSync())
+            vim.fn.writefile({'sibling'}, MOVED .. '.bak')
+            vim.cmd('edit! ' .. vim.fn.fnameescape(MOVED .. '.bak'))
+            local ok = pcall(require('fundo').associate, FILE, MOVED)
+            assert(not ok and vim.fn.filereadable(vim.fn.undofile(MOVED)) == 0)
+            assert(EntryCount() == 0 and BufferText() == 'sibling')
+            vim.cmd('quitall!')
+        ]])
+    end)
+
     it('rejects legacy undo that does not match the archived text.', function()
         run([[
             vim.cmd('edit ' .. vim.fn.fnameescape(FILE))

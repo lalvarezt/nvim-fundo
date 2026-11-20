@@ -360,7 +360,7 @@ end
 
 local function canReplay(transfer)
     if fn.undofile(transfer.name) == '' then return false end
-    local bufnr = fn.bufnr(transfer.name)
+    local bufnr = utils.bufnrForPath(transfer.name)
     if bufnr < 0 or not api.nvim_buf_is_loaded(bufnr) then
         return vim.go.undofile and vim.go.undolevels >= 0
     end

@@ -36,7 +36,7 @@ local function resolveTarget(target)
         name = ok and value or ''
     elseif type(target) == 'string' and target ~= '' then
         name = fn.fnamemodify(target, ':p')
-        bufnr = fn.bufnr(name)
+        bufnr = utils.bufnrForPath(name)
         if bufnr < 0 then
             bufnr = nil
         end

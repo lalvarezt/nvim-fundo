@@ -122,6 +122,26 @@ describe('tracking controls.', function()
         assert.same({'ok'}, result)
     end)
 
+    it('includes journal-only drafts in project removal after restart.', function()
+        run([[
+            require('fundo.config').baseline_max_file_size = 0
+            vim.cmd('edit ' .. vim.fn.fnameescape(FILE))
+            vim.api.nvim_buf_set_lines(0, 0, -1, false, {'unsaved draft'})
+            require('fundo.model.undo').saveUndo = function() return false, 'cannot capture undo' end
+            vim.cmd('bwipeout!')
+            vim.cmd('quitall!')
+        ]])
+        run([[
+            local fundo, project = require('fundo'), vim.fn.fnamemodify(FILE, ':h')
+            assert(#fundo.recovery_candidates(FILE) > 0)
+            local preview = fundo.forget(project)
+            assert(#preview.records == 1 and preview.records[1].name == FILE and preview.bytes > 0)
+            local removed = fundo.forget(project, {apply = true})
+            assert(removed.applied and removed.removed == 1 and #fundo.recovery_candidates(FILE) == 0)
+            vim.cmd('quitall!')
+        ]])
+    end)
+
     it('keeps records and tracking intact when a live lock blocks removal.', function()
         local result = run([[
             local fundo = require('fundo')
